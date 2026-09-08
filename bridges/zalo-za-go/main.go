@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"os"
 	"sync"
-	"time"
 
 	zago "github.com/tranhaonguyendev/za-go"
 )
