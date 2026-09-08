@@ -51,6 +51,16 @@ export class ChannelsOauthController {
     }
   }
 
+  /**
+   * Một số ô đăng ký URL trên developers.zalo.me kiểm tra bằng cách POST tới URL
+   * (thông báo "gửi http post request... phải trả về 200") — nhận POST trả 200 để URL này
+   * đăng ký được ở ô nào của app Zalo cũng chạy.
+   */
+  @Post('zalo-oa/oauth/callback')
+  zaloOaCallbackPing() {
+    return { ok: true };
+  }
+
   @Post('zalo-personal/bridge/qr')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMIN', 'MANAGER')

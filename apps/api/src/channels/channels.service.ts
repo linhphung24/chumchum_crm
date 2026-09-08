@@ -173,8 +173,10 @@ export class ChannelsService {
     // code_verifier 43-128 ký tự hex; code_challenge = Base64Url(SHA-256(verifier)) bỏ padding
     const verifier = randomToken(32);
     const challenge = createHash('sha256').update(verifier).digest('base64url');
-    const base = (process.env.PUBLIC_API_BASE_URL ?? 'http://localhost:4000').replace(/\/$/, '');
-    const redirectUri = `${base}/channels/zalo-oa/oauth/callback`;
+    // Cho phép ghi đè redirect qua env (một số cấu hình app Zalo bắt khớp URL đã đăng ký)
+    const redirectUri =
+      process.env.ZALO_OA_REDIRECT_URI ??
+      `${(process.env.PUBLIC_API_BASE_URL ?? 'http://localhost:4000').replace(/\/$/, '')}/channels/zalo-oa/oauth/callback`;
     const url =
       `https://oauth.zaloapp.com/v4/oa/permission?app_id=${encodeURIComponent(appId)}` +
       `&redirect_uri=${encodeURIComponent(redirectUri)}` +
