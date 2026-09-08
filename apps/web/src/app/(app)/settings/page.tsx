@@ -656,6 +656,7 @@ interface DomainRow {
   status: 'PENDING' | 'VERIFIED' | string;
   method?: string | null;
   verifiedAt?: string | null;
+  externalCodes?: string[];
 }
 
 function DomainsTab() {
@@ -665,9 +666,21 @@ function DomainsTab() {
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [attempts, setAttempts] = useState<Record<string, { method: string; ok: boolean; detail: string }[]>>({});
+  const [codeInput, setCodeInput] = useState<Record<string, string>>({});
 
   async function load() {
-    setRows(await api<DomainRow[]>('/domains'));
+    const raw = await api<(Omit<DomainRow, 'externalCodes'> & { externalCodes: string })[]>('/domains');
+    setRows(
+      raw.map((r) => {
+        let codes: string[] = [];
+        try {
+          codes = JSON.parse(r.externalCodes || '[]');
+        } catch {
+          codes = [];
+        }
+        return { ...r, externalCodes: codes };
+      }),
+    );
   }
   useEffect(() => {
     load();
@@ -691,13 +704,13 @@ function DomainsTab() {
       <div className="card p-4">
         <h2 className="text-sm font-extrabold">🌐 Xác thực domain</h2>
         <p className="mt-0.5 text-xs leading-relaxed text-ink-soft">
-          Zalo/Meta yêu cầu chứng minh bạn sở hữu website khi đăng ký OA hoặc app. Thêm domain của bạn ở đây,
-          làm 1 trong 3 cách hướng dẫn (DNS TXT / meta tag / file) rồi bấm <b>Kiểm tra</b>.
+          Zalo/Meta yêu cầu chứng minh bạn sở hữu website khi đăng ký OA hoặc app. Thêm domain ở đây — với domain đang chạy
+          trên server ChumChum (vd api.chumchumbakery.com), chỉ cần <b>dán mã Zalo cấp</b> là hệ thống tự phục vụ file xác thực.
         </p>
         <div className="mt-3 flex gap-2">
           <input
             className="input flex-1"
-            placeholder="vd: chumchumbakery.com"
+            placeholder="vd: api.chumchumbakery.com"
             value={domain}
             onChange={(e) => setDomain(e.target.value)}
           />
@@ -729,7 +742,7 @@ function DomainsTab() {
                   <Badge className="bg-amber-100 text-amber-700">⏳ Chờ xác thực</Badge>
                 )}
               </div>
-              <p className="mt-0.5 text-[11px] text-ink-faint">Mã: <code>{r.verificationKey}</code></p>
+              <p className="mt-0.5 text-[11px] text-ink-faint">Mã nội bộ: <code>{r.verificationKey}</code></p>
             </div>
             <div className="flex gap-1.5">
               <button
@@ -755,6 +768,58 @@ function DomainsTab() {
             </div>
           </div>
 
+          {/* ===== Mã nhà cung cấp (Zalo) — hệ thống tự serve file/meta ===== */}
+          <div className="mt-3 rounded-xl border border-brand-100 bg-cream/60 p-3">
+            <p className="text-xs font-bold text-ink-soft">📎 Mã xác thực từ nhà cung cấp (Zalo Platform)</p>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-ink-faint">
+              Trên trang Zalo, copy nguyên dòng Zalo đưa (giá trị TXT / thẻ meta / tên file) rồi dán vào đây — hệ thống tự tách mã
+              và phục vụ file xác thực ngay trên domain này.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <input
+                className="input flex-1 text-xs"
+                placeholder="vd: zalo-platform-site-verification=UlYFSx_... hoặc <meta name=...>"
+                value={codeInput[r.id] ?? ''}
+                onChange={(e) => setCodeInput((s) => ({ ...s, [r.id]: e.target.value }))}
+              />
+              <button
+                className="btn-secondary shrink-0 px-3 py-1.5 text-xs"
+                disabled={busy || !(codeInput[r.id] ?? '').trim()}
+                onClick={() =>
+                  act(async () => {
+                    await api(`/domains/${r.id}/external-code`, { method: 'POST', body: { raw: codeInput[r.id] } });
+                    setCodeInput((s) => ({ ...s, [r.id]: '' }));
+                  })
+                }
+              >
+                ➕ Thêm mã
+              </button>
+            </div>
+            {(r.externalCodes ?? []).map((code) => (
+              <div key={code} className="mt-2.5 space-y-1.5 rounded-lg bg-white p-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <code className="truncate text-[11px] font-bold">{code}</code>
+                  <button
+                    className="shrink-0 text-[11px] font-bold text-red-500 hover:underline"
+                    onClick={() => act(() => api(`/domains/${r.id}/external-code?code=${encodeURIComponent(code)}`, { method: 'DELETE' }))}
+                  >
+                    Xoá
+                  </button>
+                </div>
+                <CopyRow label="File HTML (mở để xác nhận đã live):" value={`${API_URL}/zalo_verifier${code}.html`} />
+                <CopyRow label="Hoặc DNS TXT (host @ / api):" value={`zalo-platform-site-verification=${code}`} />
+                <a
+                  href={`${API_URL}/zalo_verifier${code}.html`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-block text-[11px] font-bold text-brand-600 hover:underline"
+                >
+                  ↗ Mở file xác thực trong tab mới
+                </a>
+              </div>
+            ))}
+          </div>
+
           {(attempts[r.id] || r.status !== 'VERIFIED') && (
             <div className="mt-2 space-y-1">
               {(attempts[r.id] ?? []).map((a, i) => (
@@ -768,7 +833,7 @@ function DomainsTab() {
           {r.status !== 'VERIFIED' && (
             <div className="mt-3">
               <button className="text-xs font-bold text-brand-600" onClick={() => setExpanded(expanded === r.id ? null : r.id)}>
-                {expanded === r.id ? '▲ Ẩn hướng dẫn' : '▼ Xem 3 cách xác thực'}
+                {expanded === r.id ? '▲ Ẩn hướng dẫn tự xác thực' : '▼ 3 cách tự xác thực bằng mã nội bộ'}
               </button>
               {expanded === r.id && <DomainGuide row={r} />}
             </div>

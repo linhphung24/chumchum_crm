@@ -81,6 +81,91 @@ export class DomainsService {
     return { domain: record.domain, status: record.status, method: record.method, verifiedAt: record.verifiedAt };
   }
 
+  // ============ Mã nhà cung cấp (vd Zalo Platform) — API tự phục vụ file/meta ============
+
+  /** Tách mã từ chuỗi tuỳ ý người dùng dán vào (TXT value / thẻ meta / tên file / mã trần) */
+  static extractCode(raw: string): string | null {
+    const JUNK = new Set(['zalo-platform-site-verification', 'chumchum-site-verification']);
+    const matches = (raw ?? '')
+      .match(/[A-Za-z0-9_-]{20,}/g)
+      ?.map((m) => m.replace(/^zalo_verifier/, ''))
+      .filter((m) => !JUNK.has(m) && m.length >= 20)
+      ?.sort((a, b) => b.length - a.length);
+    return matches?.[0] ?? null;
+  }
+
+  private parseCodes(row: { externalCodes: string }): string[] {
+    try {
+      return JSON.parse(row.externalCodes || '[]') as string[];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Thêm mã nhà cung cấp — người dùng dán nguyên dòng Zalo đưa, hệ thống tự tách mã */
+  async addExternalCode(id: string, raw: string) {
+    const record = await this.ensure(id);
+    const code = DomainsService.extractCode(raw);
+    if (!code) throw new BadRequestException('Không tìm thấy mã hợp lệ trong nội dung bạn dán');
+    const codes = this.parseCodes(record);
+    if (!codes.includes(code)) codes.push(code);
+    const updated = await this.prisma.domainVerification.update({
+      where: { id },
+      data: { externalCodes: JSON.stringify(codes) },
+    });
+    return { ...updated, externalCodes: codes };
+  }
+
+  async removeExternalCode(id: string, code: string) {
+    const record = await this.ensure(id);
+    const codes = this.parseCodes(record).filter((c) => c !== code);
+    const updated = await this.prisma.domainVerification.update({
+      where: { id },
+      data: { externalCodes: JSON.stringify(codes) },
+    });
+    return { ...updated, externalCodes: codes };
+  }
+
+  /** Toàn bộ mã đang có (cho trang chủ / meta tags) */
+  async allExternalCodes(): Promise<string[]> {
+    const rows = await this.prisma.domainVerification.findMany({ select: { externalCodes: true } });
+    return rows.flatMap((r) => this.parseCodes(r));
+  }
+
+  /** File xác thực chuẩn Zalo: /zalo_verifier<mã>.html (khớp tên file Zalo yêu cầu tải lên) */
+  zaloVerifierHtml(code: string): string {
+    return [
+      '<!DOCTYPE html>',
+      '<html lang="en">',
+      '<head>',
+      `    <meta property="zalo-platform-site-verification" content="${code}" />`,
+      '</head>',
+      '<body>',
+      'There Is No Limit To What You Can Accomplish Using Zalo!',
+      '</body>',
+      '</html>',
+    ].join('\n');
+  }
+
+  /** Trang chủ API: HTML tối giản chứa mọi meta tag xác thực của nhà cung cấp */
+  async rootHtml(): Promise<string> {
+    const codes = await this.allExternalCodes();
+    const metas = codes
+      .map((c) => `  <meta name="zalo-platform-site-verification" content="${c}" />`)
+      .join('\n');
+    return [
+      '<!DOCTYPE html>',
+      '<html lang="vi">',
+      '<head>',
+      '  <meta charset="utf-8" />',
+      '  <title>ChumChum CRM API</title>',
+      metas,
+      '</head>',
+      '<body>ChumChum CRM API 🐹</body>',
+      '</html>',
+    ].join('\n');
+  }
+
   private async markVerified(id: string, method: VerifyMethod, attempts?: { method: string; ok: boolean; detail: string }[]) {
     const updated = await this.prisma.domainVerification.update({
       where: { id },

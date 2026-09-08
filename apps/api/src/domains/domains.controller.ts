@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { IsNotEmpty, IsString } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../common/roles.guard';
@@ -9,6 +9,13 @@ export class AddDomainDto {
   @IsString()
   @IsNotEmpty()
   domain: string;
+}
+
+export class AddExternalCodeDto {
+  /** Nguyên dòng Zalo đưa (TXT value / thẻ meta / tên file) — hệ thống tự tách mã */
+  @IsString()
+  @IsNotEmpty()
+  raw: string;
 }
 
 @Controller('domains')
@@ -34,6 +41,20 @@ export class DomainsController {
   @Roles('ADMIN', 'MANAGER')
   check(@Param('id') id: string) {
     return this.domains.check(id);
+  }
+
+  @Post(':id/external-code')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MANAGER')
+  addExternalCode(@Param('id') id: string, @Body() dto: AddExternalCodeDto) {
+    return this.domains.addExternalCode(id, dto.raw);
+  }
+
+  @Delete(':id/external-code')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MANAGER')
+  removeExternalCode(@Param('id') id: string, @Query('code') code: string) {
+    return this.domains.removeExternalCode(id, code);
   }
 
   @Delete(':id')

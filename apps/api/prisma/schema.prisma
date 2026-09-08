@@ -246,10 +246,13 @@ model IntegrationSetting {
 
 // Xác thực sở hữu domain (Zalo/Meta yêu cầu khi đăng ký OA/app): mỗi domain 1 mã duy nhất,
 // xác thực bằng 1 trong 3 cách: DNS TXT / meta tag trang chủ / file HTML tại /{key}.txt
+// externalCodes: JSON string — các mã nhà cung cấp cấp (vd Zalo platform verification),
+// API tự phục vụ file /zalo_verifier<mã>.html + meta tag cho các mã này (domain chạy trên server mình).
 model DomainVerification {
   id              String    @id @default(cuid())
   domain          String    @unique
   verificationKey String    @unique
+  externalCodes   String    @default("[]")
   // PENDING | VERIFIED
   status          String    @default("PENDING")
   // DNS | META | FILE — cách đã xác thực thành công
