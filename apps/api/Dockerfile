@@ -22,6 +22,8 @@ COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/api/tsconfig.json apps/api/
 COPY apps/api/prisma ./apps/api/prisma
+# File xác thực tĩnh (zalo_verifier*.html) phục vụ ở / — xem main.ts
+COPY apps/api/public ./apps/api/public
 COPY --from=build /app/apps/api/dist ./apps/api/dist
 # prisma + ts-node nằm trong dependencies nên có sẵn cho migrate/seed
 RUN npm ci --workspace @chumchum/api --include-workspace-root --omit=dev \
