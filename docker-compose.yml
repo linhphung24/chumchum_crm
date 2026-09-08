@@ -1,0 +1,59 @@
+# ChumChum CRM — hạ tầng Docker
+#
+# Dev local : `docker compose up -d`            → chỉ postgres (đủ cho npm run dev / setup)
+# VPS       : `docker compose --profile app up -d --build` → postgres + api + web
+#
+# Biến đọc từ file .env ở gốc repo (copy từ .env.example khi deploy) — xem docs/DEPLOY-VPS.md.
+# Lưu ý: Redis đã bỏ khỏi stack — code chưa dùng (thêm lại khi cần cache/queue).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chumchum}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chumchum}
+      POSTGRES_DB: ${POSTGRES_DB:-chumchum}
+    # Chỉ mở trên máy chủ đó (127.0.0.1), không public ra internet
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chumchum} -d ${POSTGRES_DB:-chumchum}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Bên trong mạng docker, host là tên service `postgres`
+      DATABASE_URL: postgresql://${POSTGRES_USER:-chumchum}:${POSTGRES_PASSWORD:-chumchum}@postgres:5432/${POSTGRES_DB:-chumchum}?schema=public
+    ports:
+      - "127.0.0.1:4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        # URL public của API — bake vào client bundle lúc build
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

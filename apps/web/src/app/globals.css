@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply bg-cream text-ink antialiased;
+  font-feature-settings: 'tnum';
+}
+
+/* Scrollbar mảnh, tông hồng */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-thumb {
+  @apply bg-brand-200 rounded-full;
+}
+*::-webkit-scrollbar-thumb:hover {
+  @apply bg-brand-300;
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-2xl border border-brand-100 shadow-card;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-brand-500 text-white hover:bg-brand-600;
+  }
+  .btn-secondary {
+    @apply btn bg-white text-ink border border-brand-200 hover:bg-brand-50;
+  }
+  .btn-ghost {
+    @apply btn text-ink-soft hover:bg-brand-50;
+  }
+  .input {
+    @apply w-full rounded-xl border border-brand-200 bg-white px-3 py-2 text-sm outline-none transition-colors placeholder:text-ink-faint focus:border-brand-400 focus:ring-2 focus:ring-brand-100;
+  }
+  .label {
+    @apply block text-xs font-semibold text-ink-soft mb-1;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+}

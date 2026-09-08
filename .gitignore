@@ -1,0 +1,29 @@
+node_modules/
+dist/
+.next/
+out/
+build/
+*.log
+npm-debug.log*
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.db-journal
+apps/api/prisma/*.db
+
+# Backup database trên VPS (docs/DEPLOY-VPS.md)
+backups/
+
+# Build info (TypeScript incremental)
+*.tsbuildinfo
+
+# IDE / tool local state
+.idea/
+.vscode/
+.zcode/

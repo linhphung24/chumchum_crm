@@ -1,0 +1,243 @@
+// ChumChum CRM — Prisma schema
+// Dùng PostgreSQL cho cả dev lẫn production (dev chạy `docker compose up -d` để có postgres)
+// Sửa schema → `npx prisma migrate dev --name <ten>` → restart API.
+// Lưu ý: dùng String thay vì enum/array/Json.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Vai trò: ADMIN | MANAGER | STAFF
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         String   @default("STAFF")
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  refreshTokens         RefreshToken[]
+  assignedConversations Conversation[] @relation("AssignedConversations")
+  createdOrders         Order[]        @relation("OrderCreator")
+  orderEvents           OrderEvent[]
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// Kênh: ZALO_OA | ZALO_PERSONAL | FACEBOOK | INSTAGRAM | TIKTOK | SHOPEE
+model ChannelAccount {
+  id          String   @id @default(cuid())
+  type        String
+  externalId  String
+  name        String
+  avatarUrl   String?
+  // JSON string: { accessToken?, pageAccessToken?, appId?, appSecret? ... }
+  // Rỗng = chế độ MOCK (giả lập, chưa kết nối thật)
+  credentials String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  identities    ChannelIdentity[]
+  conversations Conversation[]
+
+  @@unique([type, externalId])
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  email     String?
+  address   String?
+  avatarUrl String?
+  // comma-separated: "VIP,mua-lai"
+  tags      String   @default("")
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  identities     ChannelIdentity[]
+  orders         Order[]
+  conversations  Conversation[]
+  socialComments SocialComment[]
+}
+
+// Danh tính social của khách trên từng kênh (1 khách ↔ nhiều kênh)
+model ChannelIdentity {
+  id               String  @id @default(cuid())
+  customerId       String
+  channelAccountId String
+  externalUserId   String
+  displayName      String?
+  avatarUrl        String?
+
+  customer       Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  channelAccount ChannelAccount  @relation(fields: [channelAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([channelAccountId, externalUserId])
+  @@index([customerId])
+}
+
+// Trạng thái: OPEN | PENDING | CLOSED
+model Conversation {
+  id                String    @id @default(cuid())
+  customerId        String
+  channelAccountId  String
+  assignedUserId    String?
+  status            String    @default("OPEN")
+  lastMessageAt     DateTime  @default(now())
+  lastMessageText   String    @default("")
+  lastDirection     String    @default("IN")
+  unreadCount       Int       @default(0)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  customer       Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  channelAccount ChannelAccount  @relation(fields: [channelAccountId], references: [id], onDelete: Cascade)
+  assignedUser   User?           @relation("AssignedConversations", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages       Message[]
+
+  @@unique([customerId, channelAccountId])
+  @@index([lastMessageAt])
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String
+  // IN | OUT
+  direction      String
+  // TEXT | IMAGE | VIDEO | AUDIO | FILE | STICKER
+  type           String   @default("TEXT")
+  text           String?
+  attachmentUrl  String?
+  externalId     String?
+  // PENDING | SENT | DELIVERED | READ | FAILED | MOCKED
+  status         String   @default("SENT")
+  sentById       String?
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+// Comment Facebook để đặt hàng
+model SocialComment {
+  id                String    @id @default(cuid())
+  channelAccountId  String
+  postId            String
+  postPermalink     String?
+  postMessage       String?
+  externalId        String    @unique
+  parentId          String?
+  authorExternalId  String
+  authorName        String
+  message           String
+  // NEW | HANDLED
+  status            String    @default("NEW")
+  replyText         String?
+  repliedAt         DateTime?
+  customerId        String?
+  orderId           String?
+  createdAt         DateTime  @default(now())
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  order     Order?    @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+}
+
+// Trạng thái: NEW | CONFIRMED | SHIPPING | COMPLETED | CANCELLED
+// Nguồn: CHAT | COMMENT | SHOPEE | MANUAL
+model Order {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  customerId      String
+  status          String    @default("NEW")
+  total           Int       @default(0)
+  note            String?
+  shippingAddress String?
+  shippingPhone   String?
+  sourceType      String    @default("MANUAL")
+  sourceChannel   String?
+  externalOrderId String?
+  trelloCardId    String?
+  trelloCardUrl   String?
+  createdById     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  customer   Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdBy  User?        @relation("OrderCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  items      OrderItem[]
+  events     OrderEvent[]
+  comments   SocialComment[]
+
+  @@index([status, createdAt])
+  @@index([customerId])
+}
+
+model OrderItem {
+  id          String @id @default(cuid())
+  orderId     String
+  productName String
+  variant     String?
+  quantity    Int    @default(1)
+  price       Int    @default(0)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model OrderEvent {
+  id         String   @id @default(cuid())
+  orderId    String
+  fromStatus String?
+  toStatus   String
+  note       String?
+  createdById String?
+  createdAt  DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user  User? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+}
+
+// Cấu hình tích hợp (provider: TRELLO, data: JSON string)
+model IntegrationSetting {
+  id        String   @id @default(cuid())
+  provider  String   @unique
+  data      String   @default("{}")
+  updatedAt DateTime @updatedAt
+}
+
+model WebhookLog {
+  id        String   @id @default(cuid())
+  provider  String
+  event     String?
+  // 'OK' | 'ERROR'
+  status    String   @default("OK")
+  error     String?
+  payload   String?
+  createdAt DateTime @default(now())
+
+  @@index([provider, createdAt])
+}

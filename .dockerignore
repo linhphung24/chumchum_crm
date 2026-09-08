@@ -1,0 +1,16 @@
+# Không đưa vào build context (nhỏ gọn + không lộ secret)
+node_modules
+**/node_modules
+**/dist
+**/.next
+**/*.db
+**/*.db-journal
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+docs
+scripts
+*.md
+deploy

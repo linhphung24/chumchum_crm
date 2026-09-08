@@ -1,0 +1,24 @@
+{
+  "name": "ChumChum CRM",
+  "short_name": "ChumChum",
+  "description": "Inbox đa kênh + quản lý khách hàng & đơn hàng",
+  "start_url": "/inbox",
+  "display": "standalone",
+  "background_color": "#FFF9F6",
+  "theme_color": "#FB6A52",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
