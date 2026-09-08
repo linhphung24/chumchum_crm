@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { api, getStoredUser, logout } from '@/lib/api';
+import { api, getStoredUser, logout, API_URL } from '@/lib/api';
 import { disablePush, enablePush, getPushState, type PushState } from '@/lib/push';
 import { ROLE_LABELS, type ChannelAccount, type ChannelMeta, type ChannelType, type Role, type User } from '@/lib/types';
 import { Badge, Modal, PageHeader, Spinner } from '@/components/ui';
@@ -17,6 +17,16 @@ export default function SettingsPage() {
   const [tab, setTab] = useState<(typeof TABS)[number]['key']>('channels');
   const [me, setMe] = useState(getStoredUser());
   const [pwOpen, setPwOpen] = useState(false);
+  const [zaloMsg, setZaloMsg] = useState('');
+
+  // Kết quả redirect về từ luồng OAuth Zalo OA (?zalo-oa=ok|fail)
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const status = q.get('zalo-oa');
+    if (status === 'ok') setZaloMsg(`✅ Đã kết nối Zalo OA "${q.get('name') ?? ''}" qua cấp quyền nhanh`);
+    if (status === 'fail') setZaloMsg(`❌ Cấp quyền Zalo OA thất bại: ${q.get('msg') ?? ''}`);
+    if (status) window.history.replaceState({}, '', '/settings');
+  }, []);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -27,6 +37,12 @@ export default function SettingsPage() {
             <button className="btn-secondary" onClick={logout}>Đăng xuất</button>
           </div>
         } />
+
+        {zaloMsg && (
+          <p className={`mb-3 rounded-xl px-3 py-2 text-xs font-semibold ${zaloMsg.startsWith('✅') ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
+            {zaloMsg}
+          </p>
+        )}
 
         <div className="mb-4 flex flex-wrap gap-1.5">
           {TABS.map((t) => (
@@ -162,23 +178,91 @@ function ChangePasswordModal({ open, onClose, onDone }: { open: boolean; onClose
 
 // ================= KÊNH =================
 
-const CRED_FIELDS: Partial<Record<ChannelType, { key: string; label: string; hint?: string }[]>> = {
-  ZALO_OA: [
-    { key: 'accessToken', label: 'OA Access Token', hint: 'developers.zalo.me → quản lý OA' },
-  ],
-  ZALO_PERSONAL: [
-    { key: 'bridgeUrl', label: 'Bridge URL (không chính thức)', hint: '⚠️ Rủi ro khóa tài khoản Zalo!' },
-    { key: 'apiKey', label: 'Bridge API Key' },
-  ],
-  FACEBOOK: [{ key: 'pageAccessToken', label: 'Page Access Token', hint: 'Meta for Developers → Messenger' }],
-  INSTAGRAM: [{ key: 'pageAccessToken', label: 'Page Access Token (IG gắn Page)' }],
-  TIKTOK: [{ key: 'accessToken', label: 'Business Messaging Access Token' }],
-  SHOPEE: [
-    { key: 'baseUrl', label: 'Base URL', hint: 'vd: https://partner.test-stable.shopeemobile.com' },
-    { key: 'partnerId', label: 'Partner ID' },
-    { key: 'partnerKey', label: 'Partner Key' },
-    { key: 'shopId', label: 'Shop ID' },
-  ],
+/** Cấu hình wizard từng kênh: hướng dẫn từng bước + trường cần điền + có kiểm tra được token không */
+const CHANNEL_GUIDES: Record<
+  ChannelType,
+  {
+    intro: string;
+    risk?: string;
+    steps: { text: string; link?: { label: string; href: string } }[];
+    /** path webhook (ghép sau API_URL) — hiện kèm nút copy */
+    webhook?: string;
+    webhookNote?: string;
+    fields: { key: string; label: string; placeholder?: string; secret?: boolean }[];
+  }
+> = {
+  ZALO_OA: {
+    intro: 'Zalo Official Account — nhận & trả lời tin nhắn khách hàng qua API chính thức của Zalo.',
+    steps: [
+      { text: 'Đăng nhập developers.zalo.me bằng tài khoản Zalo đang quản lý OA', link: { label: 'Mở developers.zalo.me →', href: 'https://developers.zalo.me' } },
+      { text: 'Chọn OA của bạn → mục "Access token" → Copy (token hiệu lực 45 ngày, Zalo sẽ nhắc làm mới)' },
+      { text: 'Dán token vào ô bên dưới → bấm "Kiểm tra kết nối" (tên OA tự điền)' },
+      { text: 'Trên developers.zalo.me → Webhook → dán URL webhook bên dưới, lưu lại' },
+    ],
+    webhook: '/webhooks/zalo',
+    fields: [{ key: 'accessToken', label: 'OA Access Token', secret: true }],
+  },
+  FACEBOOK: {
+    intro: 'Messenger + Comment Facebook qua Graph API chính thức của Meta.',
+    steps: [
+      { text: 'Tạo app loại Business tại Meta for Developers', link: { label: 'Mở developers.facebook.com →', href: 'https://developers.facebook.com/apps' } },
+      { text: 'Thêm sản phẩm Messenger + Webhooks; xin quyền pages_messaging, pages_read_engagement, feed' },
+      { text: 'Tạo Page Access Token cho Page của bạn (Access Token Tool → Page token)' },
+      { text: 'Dán token → bấm "Kiểm tra kết nối" (tên Page tự điền)' },
+      { text: 'Webhooks → Callback URL = link bên dưới; Verify token = giá trị FB_VERIFY_TOKEN trong file .env' },
+    ],
+    webhook: '/webhooks/messenger',
+    fields: [{ key: 'pageAccessToken', label: 'Page Access Token', secret: true }],
+  },
+  INSTAGRAM: {
+    intro: 'Instagram Messaging — cần tài khoản IG Business đã gắn vào Fanpage Facebook.',
+    steps: [
+      { text: 'Dùng chung app Meta với Facebook (xem bước kết nối Facebook phía trên)' },
+      { text: 'Trong app → Instagram → Webhooks, đăng ký trường messages' },
+      { text: 'Dán Page Access Token (của Page mà IG gắn vào) → "Kiểm tra kết nối"' },
+      { text: 'Webhook URL dùng link bên dưới' },
+    ],
+    webhook: '/webhooks/instagram',
+    fields: [{ key: 'pageAccessToken', label: 'Page Access Token (của Page gắn IG)', secret: true }],
+  },
+  TIKTOK: {
+    intro: 'TikTok Business Messaging — cần nộp đơn xét duyệt trước khi dùng.',
+    steps: [
+      { text: 'Nộp đơn xin quyền Business Messaging tại TikTok', link: { label: 'Mở business-api.tiktok.com →', href: 'https://business-api.tiktok.com/portal/docs/access-to-business-messaging-api/v1.3' } },
+      { text: 'Sau khi được duyệt, tạo Business Messaging Access Token' },
+      { text: 'Dán token vào bên dưới rồi lưu; webhook URL dùng link bên dưới' },
+    ],
+    webhook: '/webhooks/tiktok',
+    fields: [{ key: 'accessToken', label: 'Business Messaging Access Token', secret: true }],
+  },
+  SHOPEE: {
+    intro: 'Shopee Open Platform — đồng bộ đơn hàng (chat cần xin whitelist riêng từ Shopee).',
+    steps: [
+      { text: 'Đăng ký Partner tại Shopee Open Platform', link: { label: 'Mở open.shopee.com →', href: 'https://open.shopee.com' } },
+      { text: 'Lấy Partner ID + Partner Key; ủy quyền shop để lấy Shop ID' },
+      { text: 'Điền 4 thông tin bên dưới → "Kiểm tra kết nối" (tên shop tự điền)' },
+      { text: 'Đơn hàng tự đồng bộ mỗi 30 phút sau khi kết nối' },
+    ],
+    fields: [
+      { key: 'baseUrl', label: 'Base URL', placeholder: 'https://partner.shopeemobile.com' },
+      { key: 'partnerId', label: 'Partner ID' },
+      { key: 'partnerKey', label: 'Partner Key', secret: true },
+      { key: 'shopId', label: 'Shop ID' },
+    ],
+  },
+  ZALO_PERSONAL: {
+    intro: 'Zalo cá nhân qua "bridge" tự host — kết nối bằng mã QR như đăng nhập Zalo Web.',
+    risk: 'Zalo KHÔNG có API chính thức cho tài khoản cá nhân. Bridge vi phạm điều khoản Zalo — tài khoản CÓ THỂ BỊ KHÓA. Ưu tiên dùng Zalo OA nếu có thể.',
+    steps: [
+      { text: 'Tự host 1 bridge service hỗ trợ contract /qr + /status (xem docs/HUONG-DAN-KET-NOI.md)' },
+      { text: 'Điền Bridge URL + API key bên dưới, bấm "Lấy mã QR"' },
+      { text: 'Mở Zalo trên điện thoại → quét mã QR hiển thị → chờ trạng thái "đã đăng nhập"' },
+    ],
+    fields: [
+      { key: 'bridgeUrl', label: 'Bridge URL', placeholder: 'https://bridge.cua-ban.com' },
+      { key: 'apiKey', label: 'Bridge API Key', secret: true },
+    ],
+  },
 };
 
 function ChannelsTab() {
@@ -198,8 +282,7 @@ function ChannelsTab() {
 
   return (
     <div className="space-y-3">
-      {meta.filter((m) => m.envBridge === undefined).length === 0 && null}
-      {(Object.keys(CRED_FIELDS) as ChannelType[]).map((type) => {
+      {(Object.keys(CHANNEL_GUIDES) as ChannelType[]).map((type) => {
         const m = meta.find((x) => x.type === type);
         const accs = accounts.filter((a) => a.type === type);
         return (
@@ -208,6 +291,7 @@ function ChannelsTab() {
               <div className="flex items-center gap-2">
                 <ChannelPill type={type} />
                 {m?.requiresApproval && <Badge className="bg-amber-100 text-amber-700">Cần xét duyệt</Badge>}
+                {type === 'ZALO_PERSONAL' && <Badge className="bg-red-100 text-red-700">Không chính thức</Badge>}
               </div>
               <div className="flex gap-2">
                 {accs.length > 0 && (
@@ -221,8 +305,8 @@ function ChannelsTab() {
                     {accs[0].isActive ? '⏸ Tạm tắt' : '▶️ Bật'}
                   </button>
                 )}
-                <button className="btn-primary px-3 py-1.5 text-xs" onClick={() => { setEditing(null); setOpen(true); }}>
-                  ⚙️ {accs.length ? 'Sửa kết nối' : 'Kết nối'}
+                <button className="btn-primary px-3 py-1.5 text-xs" onClick={() => { setEditing(accs[0] ?? null); setOpen(true); }}>
+                  ⚙️ {accs.length && accs[0].hasCredentials ? 'Sửa kết nối' : 'Kết nối'}
                 </button>
               </div>
             </div>
@@ -231,7 +315,7 @@ function ChannelsTab() {
                 {accs.map((a) => (
                   <div key={a.id} className="flex items-center gap-2">
                     <span className={a.hasCredentials ? 'text-emerald-600' : 'text-amber-600'}>
-                      {a.hasCredentials ? '✅ Đã kết nối' : '🟡 Chế độ mock (chưa có token)'}
+                      {a.hasCredentials ? '✅ Đã kết nối' : '🟡 Chưa có token'}
                     </span>
                     <span>· {a.name}</span>
                     <span>· {a._count?.conversations ?? 0} hội thoại</span>
@@ -240,17 +324,7 @@ function ChannelsTab() {
                 ))}
               </div>
             ) : (
-              <p className="mt-2 text-xs text-ink-faint">Chưa kết nối — inbox vẫn nhận được tin giả lập để test</p>
-            )}
-            {type === 'TIKTOK' && (
-              <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-700">
-                TikTok Business Messaging cần nộp đơn xét duyệt tại business-api.tiktok.com — điền token vào khi được cấp.
-              </p>
-            )}
-            {type === 'SHOPEE' && (
-              <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-700">
-                Đồng bộ đơn hoạt động ngay với Open Platform; Chat API cần xin whitelist từ Shopee (open.shopee.com/faq/56).
-              </p>
+              <p className="mt-2 text-xs text-ink-faint">Chưa kết nối — bấm "Kết nối" để làm theo hướng dẫn từng bước</p>
             )}
           </div>
         );
@@ -264,13 +338,12 @@ function ChannelsTab() {
           </div>
           <p className="mt-2 text-xs leading-relaxed text-amber-800">
             ⚠️ Zalo KHÔNG cấp API cho tài khoản cá nhân. Kênh này chạy qua &quot;bridge&quot; tự host —{' '}
-            <b>vi phạm điều khoản Zalo, tài khoản có thể bị khóa bất cứ lúc nào</b>. Cấu hình bridge qua biến môi trường
-            ZALO_PERSONAL_BRIDGE_URL hoặc form kết nối. Mặc định tắt cho tới khi bạn chủ động bật.
+            <b>vi phạm điều khoản Zalo, tài khoản có thể bị khóa bất cứ lúc nào</b>. Mặc định tắt cho tới khi bạn chủ động bật.
           </p>
         </div>
       )}
 
-      <ConnectModal
+      <ChannelWizard
         open={open}
         editing={editing}
         onClose={() => setOpen(false)}
@@ -283,7 +356,8 @@ function ChannelsTab() {
   );
 }
 
-function ConnectModal({
+/** Wizard kết nối kênh: B1 hướng dẫn từng bước (link + copy webhook) → B2 điền token + kiểm tra kết nối */
+function ChannelWizard({
   open,
   editing,
   onClose,
@@ -294,12 +368,23 @@ function ConnectModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const [step, setStep] = useState<1 | 2>(1);
   const [type, setType] = useState<ChannelType>('ZALO_OA');
   const [name, setName] = useState('');
   const [externalId, setExternalId] = useState('');
   const [creds, setCreds] = useState<Record<string, string>>({});
+  const [testResult, setTestResult] = useState<{ ok: boolean; name?: string; avatarUrl?: string; externalId?: string; message?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+  // Zalo OA OAuth
+  const [oauthUrl, setOauthUrl] = useState<string | null | undefined>(undefined);
+  // Zalo cá nhân QR
+  const [qr, setQr] = useState<string | null>(null);
+  const [qrWaiting, setQrWaiting] = useState(false);
+
+  const guide = CHANNEL_GUIDES[type];
+  const webhookUrl = guide?.webhook ? `${API_URL}${guide.webhook}` : null;
 
   useEffect(() => {
     if (open) {
@@ -307,72 +392,243 @@ function ConnectModal({
       setName(editing?.name ?? '');
       setExternalId(editing?.externalId ?? '');
       setCreds({});
+      setStep(1);
+      setTestResult(null);
       setError('');
+      setQr(null);
+      setQrWaiting(false);
+      setOauthUrl(undefined);
     }
   }, [open, editing]);
 
-  const fields = CRED_FIELDS[type] ?? [];
+  // Zalo OA: hỏi server có URL cấp quyền OAuth không (chỉ khi đã đăng ký app Zalo)
+  useEffect(() => {
+    if (open && type === 'ZALO_OA' && oauthUrl === undefined) {
+      api<{ url: string | null }>('/channels/zalo-oa/oauth/start')
+        .then((r) => setOauthUrl(r.url))
+        .catch(() => setOauthUrl(null));
+    }
+  }, [open, type, oauthUrl]);
+
+  async function runTest() {
+    setBusy(true);
+    setError('');
+    setTestResult(null);
+    try {
+      const r = await api<{ ok: boolean; name?: string; avatarUrl?: string; externalId?: string; message?: string }>('/channel-accounts/test', {
+        method: 'POST',
+        body: { type, credentials: creds },
+      });
+      setTestResult(r);
+      if (r.ok) {
+        if (r.name && !name) setName(r.name);
+        if (r.externalId && !externalId) setExternalId(r.externalId);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function fetchQr() {
+    setBusy(true);
+    setError('');
+    setQr(null);
+    try {
+      const r = await api<{ qr: string }>('/channels/zalo-personal/bridge/qr', {
+        method: 'POST',
+        body: { bridgeUrl: creds.bridgeUrl ?? '', apiKey: creds.apiKey },
+      });
+      setQr(r.qr);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Poll trạng thái bridge cho tới khi quét QR xong */
+  async function waitQrLogin() {
+    setQrWaiting(true);
+    for (let i = 0; i < 40; i++) {
+      try {
+        const r = await api<{ connected: boolean }>('/channels/zalo-personal/bridge/status', {
+          method: 'POST',
+          body: { bridgeUrl: creds.bridgeUrl ?? '', apiKey: creds.apiKey },
+        });
+        if (r.connected) {
+          setTestResult({ ok: true, message: '✅ Bridge đã đăng nhập Zalo — bấm "Lưu kết nối"' });
+          setQrWaiting(false);
+          return;
+        }
+      } catch {
+        /* bridge đang khởi động — thử lại */
+      }
+      await new Promise((res) => setTimeout(res, 3000));
+    }
+    setQrWaiting(false);
+    setError('Hết thời gian chờ quét QR (~2 phút). Bấm "Lấy mã QR" để thử lại.');
+  }
 
   return (
-    <Modal open={open} onClose={onClose} title={editing ? `Sửa kết nối — ${editing.name}` : 'Kết nối kênh'}>
-      <div className="space-y-3">
-        <div>
-          <label className="label">Kênh</label>
-          <select className="input" value={type} disabled={!!editing} onChange={(e) => setType(e.target.value as ChannelType)}>
-            {(Object.keys(CRED_FIELDS) as ChannelType[]).map((t) => (
-              <option key={t} value={t}>{t}</option>
+    <Modal open={open} onClose={onClose} title={`Kết nối ${editing?.name ?? type} — Bước ${step}/2`}>
+      {step === 1 ? (
+        <div className="space-y-3">
+          <p className="text-sm leading-relaxed text-ink-soft">{guide?.intro}</p>
+          {guide?.risk && (
+            <p className="rounded-xl bg-red-50 px-3 py-2 text-xs font-medium leading-relaxed text-red-600">⚠️ {guide.risk}</p>
+          )}
+          <ol className="space-y-2.5">
+            {guide?.steps.map((s, i) => (
+              <li key={i} className="flex gap-2.5 text-sm leading-relaxed">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-100 text-[11px] font-extrabold text-brand-700">{i + 1}</span>
+                <span>
+                  {s.text}{' '}
+                  {s.link && (
+                    <a href={s.link.href} target="_blank" rel="noreferrer" className="font-bold text-brand-600 underline">
+                      {s.link.label}
+                    </a>
+                  )}
+                </span>
+              </li>
             ))}
-          </select>
-        </div>
-        <div>
-          <label className="label">Tên hiển thị</label>
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="vd: Zalo OA ChumChum" />
-        </div>
-        <div>
-          <label className="label">ID kênh (external ID)</label>
-          <input className="input" value={externalId} onChange={(e) => setExternalId(e.target.value)} placeholder="vd: OA id / Page id / Shop id" />
-        </div>
-        <div className="rounded-xl bg-brand-50 p-3">
-          <p className="mb-2 text-xs font-bold text-ink-soft">Thông tin đăng nhập (để trống = giữ chế độ mock)</p>
-          <div className="space-y-2">
-            {fields.map((f) => (
-              <div key={f.key}>
-                <label className="label">{f.label}{f.hint && <span className="ml-1 font-normal text-ink-faint">— {f.hint}</span>}</label>
-                <input
-                  className="input"
-                  type={f.key.toLowerCase().includes('key') || f.key.toLowerCase().includes('token') ? 'password' : 'text'}
-                  value={creds[f.key] ?? ''}
-                  onChange={(e) => setCreds({ ...creds, [f.key]: e.target.value })}
-                />
+          </ol>
+          {webhookUrl && (
+            <div className="rounded-xl bg-brand-50 p-3">
+              <p className="text-xs font-bold text-ink-soft">Webhook URL (copy rồi dán vào trang của kênh):</p>
+              <div className="mt-1.5 flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded-lg bg-white px-2 py-1.5 text-xs">{webhookUrl}</code>
+                <button
+                  className="btn-secondary shrink-0 px-3 py-1.5 text-xs"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(webhookUrl);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  }}
+                >
+                  {copied ? '✅ Đã copy' : '📋 Copy'}
+                </button>
               </div>
-            ))}
+            </div>
+          )}
+          <button className="btn-primary w-full py-2.5" onClick={() => setStep(2)}>
+            Tiếp tục →
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {type === 'ZALO_OA' && (
+            <div className="rounded-xl bg-brand-50 p-3">
+              {oauthUrl ? (
+                <>
+                  <p className="mb-2 text-xs font-bold text-ink-soft">Cấp quyền nhanh qua Zalo (khỏi dán token):</p>
+                  <a href={oauthUrl} className="btn-primary flex items-center justify-center py-2 text-sm">
+                    🔗 Đăng nhập Zalo để cấp quyền
+                  </a>
+                </>
+              ) : (
+                <p className="text-xs leading-relaxed text-ink-soft">
+                  Mẹo: chế độ &quot;cấp quyền 1-cú-click&quot; cần đăng ký app với Zalo (env ZALO_OA_APP_ID) — hiện hãy dán token theo hướng dẫn.
+                </p>
+              )}
+            </div>
+          )}
+
+          <div>
+            <label className="label">Tên hiển thị</label>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="vd: Zalo OA ChumChum" />
+          </div>
+          <div>
+            <label className="label">ID kênh (tự điền sau khi kiểm tra kết nối)</label>
+            <input className="input" value={externalId} onChange={(e) => setExternalId(e.target.value)} placeholder="vd: OA id / Page id / Shop id" />
+          </div>
+
+          <div className="rounded-xl bg-brand-50 p-3">
+            <p className="mb-2 text-xs font-bold text-ink-soft">Thông tin đăng nhập</p>
+            <div className="space-y-2">
+              {guide?.fields.map((f) => (
+                <div key={f.key}>
+                  <label className="label">{f.label}</label>
+                  <input
+                    className="input"
+                    type={f.secret ? 'password' : 'text'}
+                    placeholder={f.placeholder}
+                    value={creds[f.key] ?? ''}
+                    onChange={(e) => setCreds({ ...creds, [f.key]: e.target.value })}
+                  />
+                </div>
+              ))}
+            </div>
+            {type !== 'ZALO_PERSONAL' && (
+              <button className="btn-secondary mt-2.5 w-full py-2 text-sm" disabled={busy} onClick={runTest}>
+                {busy ? <Spinner className="border-brand-300 border-t-brand-600" /> : '🔌 Kiểm tra kết nối'}
+              </button>
+            )}
+          </div>
+
+          {testResult && (
+            <div className={`flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm ${testResult.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
+              {testResult.avatarUrl && <img src={testResult.avatarUrl} alt="" className="h-8 w-8 rounded-lg object-cover" />}
+              <span className="font-semibold">{testResult.message}</span>
+            </div>
+          )}
+
+          {type === 'ZALO_PERSONAL' && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
+              <p className="mb-2 text-xs font-bold text-ink-soft">Đăng nhập Zalo bằng mã QR</p>
+              <div className="flex flex-wrap gap-2">
+                <button className="btn-secondary px-3 py-1.5 text-xs" disabled={busy || !creds.bridgeUrl} onClick={fetchQr}>
+                  📱 Lấy mã QR
+                </button>
+                {qr && !qrWaiting && !testResult?.ok && (
+                  <button className="btn-secondary px-3 py-1.5 text-xs" onClick={waitQrLogin}>
+                    ⏳ Chờ quét QR
+                  </button>
+                )}
+              </div>
+              {qr && (
+                <div className="mt-2.5 text-center">
+                  {qr.startsWith('data:') || qr.startsWith('http') ? (
+                    <img src={qr} alt="QR Zalo" className="mx-auto h-44 w-44 rounded-xl bg-white p-1.5" />
+                  ) : (
+                    <code className="block break-all rounded-lg bg-white px-2 py-2 text-[11px]">{qr}</code>
+                  )}
+                  {qrWaiting && <p className="mt-1.5 text-xs font-semibold text-amber-700">Đang chờ quét trên điện thoại…</p>}
+                </div>
+              )}
+            </div>
+          )}
+
+          {error && <p className="text-xs font-medium text-red-600">{error}</p>}
+          <div className="flex gap-2">
+            <button className="btn-secondary flex-1 py-2.5" onClick={() => setStep(1)}>← Hướng dẫn</button>
+            <button
+              className="btn-primary flex-[2] py-2.5"
+              disabled={busy || !name}
+              onClick={async () => {
+                setBusy(true);
+                setError('');
+                try {
+                  const finalExternalId = externalId || testResult?.externalId || `manual-${type}`;
+                  if (editing) {
+                    await api(`/channel-accounts/${editing.id}`, { method: 'PATCH', body: { name, credentials: creds } });
+                  } else {
+                    await api('/channel-accounts', { method: 'POST', body: { type, name, externalId: finalExternalId, credentials: creds } });
+                  }
+                  onSaved();
+                } catch (err) {
+                  setError((err as Error).message);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? <Spinner className="border-white/40 border-t-white" /> : '💾 Lưu kết nối'}
+            </button>
           </div>
         </div>
-        {error && <p className="text-xs font-medium text-red-600">{error}</p>}
-        <button
-          className="btn-primary w-full py-2.5"
-          disabled={busy || !name}
-          onClick={async () => {
-            setBusy(true);
-            setError('');
-            try {
-              const body = { type, name, externalId: externalId || `manual-${type}`, credentials: creds };
-              if (editing) {
-                await api(`/channel-accounts/${editing.id}`, { method: 'PATCH', body: { name, credentials: creds } });
-              } else {
-                await api('/channel-accounts', { method: 'POST', body });
-              }
-              onSaved();
-            } catch (err) {
-              setError((err as Error).message);
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          {busy ? <Spinner className="border-white/40 border-t-white" /> : 'Lưu kết nối'}
-        </button>
-      </div>
+      )}
     </Modal>
   );
 }

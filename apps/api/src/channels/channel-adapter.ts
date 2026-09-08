@@ -23,6 +23,18 @@ export interface SendResult {
   error?: string;
 }
 
+/** Kết quả kiểm tra kết nối (wizard Cài đặt → Kênh → "Kiểm tra kết nối") */
+export interface TestConnectionResult {
+  ok: boolean;
+  /** Tên kênh lấy tự động từ nền tảng (tự điền vào form) */
+  name?: string;
+  avatarUrl?: string;
+  /** externalId (Page id / OA id / Shop id) lấy tự động */
+  externalId?: string;
+  /** Thông điệp hiển thị cho người dùng khi không ok */
+  message?: string;
+}
+
 /** Interface chuẩn mọi kênh phải cài đặt */
 export interface ChannelAdapter {
   readonly type: ChannelType;
@@ -36,6 +48,8 @@ export interface ChannelAdapter {
     account: { credentials?: string | null; externalId: string },
     externalUserId: string,
   ): Promise<{ displayName?: string; avatarUrl?: string } | null>;
+  /** Kiểm tra credentials có hợp lệ không (gọi API nền tảng) — dùng cho wizard kết nối */
+  testConnection?(credentials: Record<string, string>): Promise<TestConnectionResult>;
 }
 
 export function mockSendResult(): SendResult {

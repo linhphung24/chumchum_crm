@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ChannelsController } from './channels.controller';
+import { ChannelsOauthController } from './channels-oauth.controller';
 import { ChannelsService } from './channels.service';
 import { ChannelIngestService } from './channel-ingest.service';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -14,7 +15,7 @@ import {
 
 @Module({
   imports: [NotificationsModule],
-  controllers: [ChannelsController],
+  controllers: [ChannelsController, ChannelsOauthController],
   providers: [
     ChannelsService,
     ChannelIngestService,

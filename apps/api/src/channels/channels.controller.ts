@@ -37,6 +37,15 @@ export class UpdateChannelAccountDto {
   credentials?: Record<string, string>;
 }
 
+export class TestConnectionDto {
+  @IsString()
+  @IsNotEmpty()
+  type: string;
+
+  @IsObject()
+  credentials: Record<string, string>;
+}
+
 @Controller('channel-accounts')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ChannelsController {
@@ -50,6 +59,13 @@ export class ChannelsController {
   @Get()
   list() {
     return this.channels.listAccounts();
+  }
+
+  /** Wizard: kiểm tra token với API thật của nền tảng trước khi lưu */
+  @Post('test')
+  @Roles('ADMIN', 'MANAGER')
+  test(@Body() dto: TestConnectionDto) {
+    return this.channels.testConnection(dto);
   }
 
   @Post()

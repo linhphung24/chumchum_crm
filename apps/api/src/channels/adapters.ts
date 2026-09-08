@@ -3,6 +3,7 @@ import { createHmac } from 'crypto';
 import {
   ChannelAdapter,
   SendResult,
+  TestConnectionResult,
   getJson,
   mockSendResult,
   parseCredentials,
@@ -55,6 +56,24 @@ export class FacebookAdapter implements ChannelAdapter {
     );
     return { displayName: json?.name as string | undefined, avatarUrl: json?.profile_pic as string | undefined };
   }
+
+  async testConnection(credentials: Record<string, string>): Promise<TestConnectionResult> {
+    if (!credentials.pageAccessToken) return { ok: false, message: 'Chưa nhập Page Access Token' };
+    try {
+      const json = await getJson(
+        `https://graph.facebook.com/${GRAPH_VERSION}/me?fields=name,picture.type(large)&access_token=${credentials.pageAccessToken}`,
+      );
+      return {
+        ok: true,
+        name: json?.name as string | undefined,
+        avatarUrl: ((json?.picture as { data?: { url?: string } })?.data?.url) as string | undefined,
+        externalId: json?.id as string | undefined,
+        message: `Kết nối thành công: ${json?.name ?? 'Page'}`,
+      };
+    } catch (err) {
+      return { ok: false, message: `Token không hợp lệ — ${(err as Error).message}` };
+    }
+  }
 }
 
 @Injectable()
@@ -67,6 +86,24 @@ export class InstagramAdapter implements ChannelAdapter {
     if (!cred?.pageAccessToken) return mockSendResult();
     // Instagram Messaging API: cùng endpoint /me/messages, recipient là IG-scoped ID
     return sendViaGraph(cred.pageAccessToken, to, text);
+  }
+
+  async testConnection(credentials: Record<string, string>): Promise<TestConnectionResult> {
+    if (!credentials.pageAccessToken) return { ok: false, message: 'Chưa nhập Page Access Token' };
+    try {
+      const json = await getJson(
+        `https://graph.facebook.com/${GRAPH_VERSION}/me?fields=name,picture.type(large)&access_token=${credentials.pageAccessToken}`,
+      );
+      return {
+        ok: true,
+        name: json?.name as string | undefined,
+        avatarUrl: ((json?.picture as { data?: { url?: string } })?.data?.url) as string | undefined,
+        externalId: json?.id as string | undefined,
+        message: `Kết nối thành công: ${json?.name ?? 'Tài khoản'}`,
+      };
+    } catch (err) {
+      return { ok: false, message: `Token không hợp lệ — ${(err as Error).message}` };
+    }
   }
 }
 
@@ -100,6 +137,27 @@ export class ZaloOaAdapter implements ChannelAdapter {
       avatarUrl: (data?.avatar as string) ?? undefined,
     };
   }
+
+  /** Kiểm tra OA Access Token: GET /v2.0/oa/getoa trả tên + oa_id → tự điền */
+  async testConnection(credentials: Record<string, string>): Promise<TestConnectionResult> {
+    if (!credentials.accessToken) return { ok: false, message: 'Chưa nhập OA Access Token' };
+    try {
+      const json = await getJson(`https://openapi.zalo.me/v2.0/oa/getoa?access_token=${credentials.accessToken}`);
+      const data = json?.data as Record<string, unknown> | undefined;
+      if (Number(json?.error_code ?? 0) !== 0 || !data) {
+        return { ok: false, message: `Zalo từ chối token (error_code ${json?.error_code})` };
+      }
+      return {
+        ok: true,
+        name: (data.name as string) ?? undefined,
+        avatarUrl: (data.avatar as string) ?? undefined,
+        externalId: String(data.oa_id ?? ''),
+        message: `Kết nối thành công: ${data.name ?? 'OA'}`,
+      };
+    } catch (err) {
+      return { ok: false, message: `Token không hợp lệ — ${(err as Error).message}` };
+    }
+  }
 }
 
 /**
@@ -131,6 +189,30 @@ export class ZaloPersonalAdapter implements ChannelAdapter {
     });
     return { externalId: (json?.messageId as string) ?? undefined };
   }
+
+  /**
+   * Kiểm tra bridge theo contract v2:
+   *   GET {bridgeUrl}/status  header x-api-key → { connected: boolean, ... }
+   * (Bridge cũ không có /status → coi như chưa xác nhận, vẫn cho lưu.)
+   */
+  async testConnection(credentials: Record<string, string>): Promise<TestConnectionResult> {
+    const bridgeUrl = credentials.bridgeUrl ?? process.env.ZALO_PERSONAL_BRIDGE_URL;
+    const apiKey = credentials.apiKey ?? process.env.ZALO_PERSONAL_BRIDGE_API_KEY;
+    if (!bridgeUrl) return { ok: false, message: 'Chưa nhập Bridge URL' };
+    try {
+      const res = await fetch(`${bridgeUrl.replace(/\/$/, '')}/status`, { headers: { 'x-api-key': apiKey ?? '' } });
+      if (!res.ok) return { ok: false, message: `Bridge trả HTTP ${res.status} — kiểm tra URL/API key` };
+      const json = (await res.json().catch(() => ({}))) as { connected?: boolean };
+      return {
+        ok: true,
+        message: json.connected
+          ? 'Bridge đang kết nối Zalo (đã đăng nhập)'
+          : 'Bridge trả lời được nhưng chưa đăng nhập Zalo — dùng mã QR để đăng nhập',
+      };
+    } catch (err) {
+      return { ok: false, message: `Không gọi được bridge — ${(err as Error).message}` };
+    }
+  }
 }
 
 @Injectable()
@@ -151,6 +233,12 @@ export class TikTokAdapter implements ChannelAdapter {
     });
     const data = json?.data as Record<string, unknown> | undefined;
     return { externalId: (data?.message_id as string) ?? undefined };
+  }
+
+  async testConnection(credentials: Record<string, string>): Promise<TestConnectionResult> {
+    if (!credentials.accessToken) return { ok: false, message: 'Chưa nhập Access Token' };
+    // TikTok Business Messaging không có endpoint kiểm tra token công khai — chỉ xác nhận đã nhập
+    return { ok: true, message: 'Đã nhận token — TikTok chỉ xác nhận thật khi có tin nhắn đầu tiên' };
   }
 }
 
@@ -180,5 +268,33 @@ export class ShopeeAdapter implements ChannelAdapter {
       'Content-Type': 'application/json',
     });
     return { externalId: (json?.request_id as string) ?? undefined };
+  }
+
+  /** Kiểm tra chữ ký + shop: GET /api/v1/shop/get_shop_info (cùng cơ chế ký HMAC v2) */
+  async testConnection(credentials: Record<string, string>): Promise<TestConnectionResult> {
+    const { baseUrl, partnerId, partnerKey, shopId } = credentials;
+    if (!baseUrl || !partnerId || !partnerKey || !shopId) {
+      return { ok: false, message: 'Cần đủ Base URL, Partner ID, Partner Key, Shop ID' };
+    }
+    const base = baseUrl.replace(/\/$/, '');
+    const path = '/api/v1/shop/get_shop_info';
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const body = JSON.stringify({ shop_id: Number(shopId) });
+    try {
+      const sign = createHmac('sha256', partnerKey).update(partnerId + path + timestamp + body).digest('hex');
+      const json = await postJson(`${base}${path}?partner_id=${partnerId}&timestamp=${timestamp}&sign=${sign}`, body, {
+        'Content-Type': 'application/json',
+      });
+      const data = json?.data as Record<string, unknown> | undefined;
+      if (!data) return { ok: false, message: `Shopee trả lỗi: ${JSON.stringify(json).slice(0, 200)}` };
+      return {
+        ok: true,
+        name: (data.shop_name as string) ?? undefined,
+        externalId: String(shopId),
+        message: `Kết nối thành công: ${data.shop_name ?? shopId}`,
+      };
+    } catch (err) {
+      return { ok: false, message: `Không kết nối được Shopee — ${(err as Error).message}` };
+    }
   }
 }
