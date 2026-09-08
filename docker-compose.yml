@@ -59,6 +59,24 @@ services:
     depends_on:
       - api
 
+  # ⚠️ KHÔNG CHÍNH THỨC — Zalo cá nhân qua bridge za-go (rủi ro khóa nick, xem bridges/zalo-za-go/README.md)
+  # Bật khi cần: docker compose --profile zalo-personal up -d --build zalo-bridge
+  zalo-bridge:
+    profiles: ["zalo-personal"]
+    build:
+      context: ./bridges/zalo-za-go
+    restart: unless-stopped
+    environment:
+      API_KEY: ${ZALO_BRIDGE_API_KEY:-doi-key-ca-nhan}
+      CRM_WEBHOOK_URL: http://api:4000/webhooks/zalo-personal
+      PHONE: ${ZALO_BRIDGE_PHONE:-}
+      PASSWORD: ${ZALO_BRIDGE_PASSWORD:-}
+    ports:
+      - "127.0.0.1:4100:4100"
+    volumes:
+      - zalo-bridge-data:/data
+
 volumes:
   pgdata:
   uploads:
+  zalo-bridge-data:
