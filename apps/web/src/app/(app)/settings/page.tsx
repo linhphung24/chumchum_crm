@@ -9,6 +9,7 @@ import { ChannelPill } from '@/components/charts';
 
 const TABS = [
   { key: 'channels', label: '🔗 Kênh' },
+  { key: 'domains', label: '🌐 Domain' },
   { key: 'users', label: '👥 Người dùng' },
   { key: 'trello', label: '🗂 Trello' },
 ] as const;
@@ -59,6 +60,7 @@ export default function SettingsPage() {
         <NotificationsCard />
 
         {tab === 'channels' && <ChannelsTab />}
+        {tab === 'domains' && <DomainsTab />}
         {tab === 'users' && <UsersTab canEdit={me?.role === 'ADMIN'} meId={me?.id} />}
         {tab === 'trello' && <TrelloTab />}
 
@@ -195,6 +197,7 @@ const CHANNEL_GUIDES: Record<
     intro: 'Zalo Official Account — nhận & trả lời tin nhắn khách hàng qua API chính thức của Zalo.',
     steps: [
       { text: 'Đăng nhập developers.zalo.me bằng tài khoản Zalo đang quản lý OA', link: { label: 'Mở developers.zalo.me →', href: 'https://developers.zalo.me' } },
+      { text: 'Nếu Zalo yêu cầu "xác thực domain": vào tab 🌐 Domain trong Cài đặt, thêm domain web của bạn và làm theo hướng dẫn (DNS/meta/file)' },
       { text: 'Chọn OA của bạn → mục "Access token" → Copy (token hiệu lực 45 ngày, Zalo sẽ nhắc làm mới)' },
       { text: 'Dán token vào ô bên dưới → bấm "Kiểm tra kết nối" (tên OA tự điền)' },
       { text: 'Trên developers.zalo.me → Webhook → dán URL webhook bên dưới, lưu lại' },
@@ -641,6 +644,186 @@ function ChannelWizard({
         </div>
       )}
     </Modal>
+  );
+}
+
+// ================= DOMAIN (xác thực sở hữu — Zalo/Meta yêu cầu khi đăng ký OA/app) =================
+
+interface DomainRow {
+  id: string;
+  domain: string;
+  verificationKey: string;
+  status: 'PENDING' | 'VERIFIED' | string;
+  method?: string | null;
+  verifiedAt?: string | null;
+}
+
+function DomainsTab() {
+  const [rows, setRows] = useState<DomainRow[]>([]);
+  const [domain, setDomain] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [attempts, setAttempts] = useState<Record<string, { method: string; ok: boolean; detail: string }[]>>({});
+
+  async function load() {
+    setRows(await api<DomainRow[]>('/domains'));
+  }
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function act(fn: () => Promise<unknown>) {
+    setError('');
+    setBusy(true);
+    try {
+      await fn();
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="card p-4">
+        <h2 className="text-sm font-extrabold">🌐 Xác thực domain</h2>
+        <p className="mt-0.5 text-xs leading-relaxed text-ink-soft">
+          Zalo/Meta yêu cầu chứng minh bạn sở hữu website khi đăng ký OA hoặc app. Thêm domain của bạn ở đây,
+          làm 1 trong 3 cách hướng dẫn (DNS TXT / meta tag / file) rồi bấm <b>Kiểm tra</b>.
+        </p>
+        <div className="mt-3 flex gap-2">
+          <input
+            className="input flex-1"
+            placeholder="vd: chumchumbakery.com"
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
+          />
+          <button
+            className="btn-primary"
+            disabled={busy || !domain}
+            onClick={() =>
+              act(async () => {
+                await api('/domains', { method: 'POST', body: { domain } });
+                setDomain('');
+              })
+            }
+          >
+            ➕ Thêm
+          </button>
+        </div>
+        {error && <p className="mt-2 text-xs font-medium text-red-600">{error}</p>}
+      </div>
+
+      {rows.map((r) => (
+        <div key={r.id} className="card p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-extrabold">{r.domain}</span>
+                {r.status === 'VERIFIED' ? (
+                  <Badge className="bg-emerald-100 text-emerald-700">✅ Đã xác thực{r.method ? ` · ${r.method}` : ''}</Badge>
+                ) : (
+                  <Badge className="bg-amber-100 text-amber-700">⏳ Chờ xác thực</Badge>
+                )}
+              </div>
+              <p className="mt-0.5 text-[11px] text-ink-faint">Mã: <code>{r.verificationKey}</code></p>
+            </div>
+            <div className="flex gap-1.5">
+              <button
+                className="btn-secondary px-3 py-1.5 text-xs"
+                disabled={busy}
+                onClick={() =>
+                  act(async () => {
+                    const res = await api<DomainRow & { attempts?: { method: string; ok: boolean; detail: string }[] }>(`/domains/${r.id}/check`, { method: 'POST' });
+                    if (res.attempts) setAttempts((a) => ({ ...a, [r.id]: res.attempts! }));
+                  })
+                }
+              >
+                🔄 Kiểm tra
+              </button>
+              <button
+                className="rounded-xl border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-red-100"
+                onClick={() => {
+                  if (window.confirm(`Xoá domain "${r.domain}"?`)) act(() => api(`/domains/${r.id}`, { method: 'DELETE' }));
+                }}
+              >
+                🗑
+              </button>
+            </div>
+          </div>
+
+          {(attempts[r.id] || r.status !== 'VERIFIED') && (
+            <div className="mt-2 space-y-1">
+              {(attempts[r.id] ?? []).map((a, i) => (
+                <p key={i} className={`text-[11px] ${a.ok ? 'text-emerald-600' : 'text-ink-faint'}`}>
+                  {a.ok ? '✅' : '·'} {a.method}: {a.detail}
+                </p>
+              ))}
+            </div>
+          )}
+
+          {r.status !== 'VERIFIED' && (
+            <div className="mt-3">
+              <button className="text-xs font-bold text-brand-600" onClick={() => setExpanded(expanded === r.id ? null : r.id)}>
+                {expanded === r.id ? '▲ Ẩn hướng dẫn' : '▼ Xem 3 cách xác thực'}
+              </button>
+              {expanded === r.id && <DomainGuide row={r} />}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CopyRow({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div>
+      <label className="label">{label}</label>
+      <div className="flex items-center gap-2">
+        <code className="min-w-0 flex-1 truncate rounded-lg bg-white px-2 py-1.5 text-[11px]">{value}</code>
+        <button
+          className="btn-secondary shrink-0 px-3 py-1.5 text-xs"
+          onClick={async () => {
+            await navigator.clipboard.writeText(value);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          }}
+        >
+          {copied ? '✅' : '📋'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DomainGuide({ row }: { row: DomainRow }) {
+  return (
+    <div className="mt-2 space-y-3 rounded-xl bg-brand-50 p-3">
+      <div>
+        <p className="mb-1 text-xs font-bold text-ink-soft">Cách 1 — DNS TXT record (ổn định nhất):</p>
+        <CopyRow label="Loại: TXT · Host: @ (hoặc để trống) · Giá trị:" value={row.verificationKey} />
+      </div>
+      <div>
+        <p className="mb-1 text-xs font-bold text-ink-soft">Cách 2 — Meta tag (dán vào thẻ &lt;head&gt; trang chủ):</p>
+        <CopyRow label="Thẻ meta:" value={`<meta name="chumchum-site-verification" content="${row.verificationKey}" />`} />
+      </div>
+      <div>
+        <p className="mb-1 text-xs font-bold text-ink-soft">Cách 3 — File trên website:</p>
+        <CopyRow label={`Tạo file "${row.verificationKey}.txt" tại thư mục gốc, nội dung:`} value={row.verificationKey} />
+      </div>
+      <div>
+        <p className="mb-1 text-xs font-bold text-ink-soft">Link kiểm tra công khai (cho nhà cung cấp):</p>
+        <CopyRow label="Endpoint JSON:" value={`${API_URL}/domains/verify/${row.verificationKey}`} />
+      </div>
+      <p className="text-[11px] leading-relaxed text-ink-faint">
+        Làm xong 1 trong 3 cách (DNS có thể mất 5–30 phút để cập nhật) → bấm <b>🔄 Kiểm tra</b>.
+      </p>
+    </div>
   );
 }
 

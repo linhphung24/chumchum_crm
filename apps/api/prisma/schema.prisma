@@ -244,6 +244,21 @@ model IntegrationSetting {
   updatedAt DateTime @updatedAt
 }
 
+// Xác thực sở hữu domain (Zalo/Meta yêu cầu khi đăng ký OA/app): mỗi domain 1 mã duy nhất,
+// xác thực bằng 1 trong 3 cách: DNS TXT / meta tag trang chủ / file HTML tại /{key}.txt
+model DomainVerification {
+  id              String    @id @default(cuid())
+  domain          String    @unique
+  verificationKey String    @unique
+  // PENDING | VERIFIED
+  status          String    @default("PENDING")
+  // DNS | META | FILE — cách đã xác thực thành công
+  method          String?
+  verifiedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
 model WebhookLog {
   id        String   @id @default(cuid())
   provider  String
