@@ -145,7 +145,10 @@ export class ZaloOaAdapter implements ChannelAdapter {
       const json = await getJson(`https://openapi.zalo.me/v2.0/oa/getoa?access_token=${credentials.accessToken}`);
       const data = json?.data as Record<string, unknown> | undefined;
       if (Number(json?.error_code ?? 0) !== 0 || !data) {
-        return { ok: false, message: `Zalo từ chối token (error_code ${json?.error_code})` };
+        return {
+          ok: false,
+          message: `Zalo từ chối token — ${json?.error_message ?? json?.error_name ?? ''} (phản hồi: ${JSON.stringify(json).slice(0, 250)})`,
+        };
       }
       return {
         ok: true,
