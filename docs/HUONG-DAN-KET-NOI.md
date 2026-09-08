@@ -123,21 +123,23 @@ TikTok Business Messaging **không mở tự do**, phải nộp đơn:
 
 > **Zalo không có API chính thức cho tài khoản cá nhân.** Kênh này chạy qua "bridge" tự host — vi phạm điều khoản Zalo, **tài khoản có thể bị khoá bất cứ lúc nào**. Khuyến nghị dùng Zalo OA thay thế. Chỉ bật nếu bạn chấp nhận rủi ro.
 
-1. Tự host một bridge service (service trung gian đăng nhập Zalo cá nhân và nhận/gửi tin) — hợp đồng API bridge cần:
+1. Tự host một bridge service (service trung gian đăng nhập Zalo cá nhân và nhận/gửi tin) — hợp đồng API bridge:
    - `POST {BRIDGE_URL}/send` — body `{ userId, text }`, header `x-api-key: BRIDGE_API_KEY` → trả `{ messageId }`
-   - Khi có tin đến: bridge POST payload chuẩn hoá về `https://your-domain/webhooks/zalo-personal`:
+   - `GET {BRIDGE_URL}/qr` — header `x-api-key` → trả `{ qr: "<dataURL hoặc chuỗi QR>" }` — **mã QR để đăng nhập Zalo (như Zalo Web)**
+   - `GET {BRIDGE_URL}/status` — header `x-api-key` → trả `{ connected: true|false }` — trạng thái đã quét QR đăng nhập chưa
+   - Khi có tin đến: bridge POST payload chuẩn hoá về `https://api.chumchumbakery.com/webhooks/zalo-personal`:
      ```json
      { "externalUserId": "...", "userDisplayName": "...", "text": "..." }
      ```
-2. Cấu hình trong `apps/api/.env`:
+2. Kết nối ngay trong app: **Cài đặt → Kênh → Zalo cá nhân → Kết nối** → điền Bridge URL + API key → bấm **"📱 Lấy mã QR"** → quét bằng app Zalo trên điện thoại → chờ trạng thái "đã đăng nhập" → **Lưu kết nối**. (Không cần sửa .env.)
+3. Hoặc cấu hình mặc định qua `apps/api/.env`:
    ```
    ZALO_PERSONAL_BRIDGE_URL=https://bridge-cua-ban.xxx
    ZALO_PERSONAL_BRIDGE_API_KEY=ma-bao-mat
    ```
-3. Restart API → vào **Cài đặt → Kênh → Zalo cá nhân → Kết nối** (hoặc để trống credentials để dùng mặc định từ .env).
 
 ---
 
 ## 🧪 Vẫn muốn test không có kênh nào?
 
-Trong **Inbox** có nút **"🧪 Giả lập tin nhắn đến"** và trang **Bình luận** có nút giả lập — dùng để demo luồng khi chưa có token. Các endpoint này **tự khoá khi `NODE_ENV=production`**, còn dữ liệu tạo ra chỉ là dữ liệu thường (xoá được như dữ liệu thật).
+Trong **Inbox** có nút **"🧪 Giả lập tin nhắn đến"** và trang **Bình luận** có nút giả lập — dùng để demo luồng khi chưa có token. Các nút và endpoint này **tự ẩn/khoá khi `NODE_ENV=production`**. Dữ liệu demo khi cần dọn: `npm run clean:demo -w apps/api`.
