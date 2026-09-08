@@ -69,8 +69,6 @@ services:
     environment:
       API_KEY: ${ZALO_BRIDGE_API_KEY:-doi-key-ca-nhan}
       CRM_WEBHOOK_URL: http://api:4000/webhooks/zalo-personal
-      PHONE: ${ZALO_BRIDGE_PHONE:-}
-      PASSWORD: ${ZALO_BRIDGE_PASSWORD:-}
     ports:
       - "127.0.0.1:4100:4100"
     volumes:

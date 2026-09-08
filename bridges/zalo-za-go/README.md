@@ -18,19 +18,20 @@ Nhân viên ──> ChumChum CRM ──> ChumChum API ──POST /send──> br
 1. Thêm vào `/opt/chumchum_crm/.env`:
    ```
    ZALO_BRIDGE_API_KEY=<mật khẩu bất kỳ bạn tự đặt>
-   ZALO_BRIDGE_PHONE=<SĐT đăng nhập Zalo cá nhân>
-   ZALO_BRIDGE_PASSWORD=<mật khẩu Zalo cá nhân>
    ```
 2. Khởi động:
    ```bash
    cd /opt/chumchum_crm
    docker compose --profile zalo-personal up -d --build zalo-bridge
-   docker compose logs zalo-bridge   # phải thấy "đã đăng nhập: true"
+   docker compose logs zalo-bridge   # thấy "Chưa có phiên — dùng nút 'Lấy mã QR'..." là đang chạy đúng
    ```
 3. Trong app: **Cài đặt → Kênh → Zalo cá nhân → Kết nối** → điền:
    - Bridge URL: `http://zalo-bridge:4100`
    - Bridge API Key: giá trị `ZALO_BRIDGE_API_KEY` ở trên
-   - Bấm **🔌 Kiểm tra kết nối** → phải báo "Bridge đang kết nối Zalo" → **Lưu kết nối**.
+4. Bấm **📱 Lấy mã QR** → mã QR hiện ngay trong app → mở **app Zalo trên điện thoại** →
+   *Cài đặt → Đăng nhập trên thiết bị khác → Quét mã QR* → quét → bấm **⏳ Chờ quét QR** (hoặc để tự chờ).
+5. Khi bridge log `✅ Đã đăng nhập Zalo qua QR` → bấm **💾 Lưu kết nối**. Phiên được lưu trong
+   volume `zalo-bridge-data` — restart container khỏi quét lại.
 
 ## API của bridge
 
