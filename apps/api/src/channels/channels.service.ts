@@ -173,10 +173,11 @@ export class ChannelsService {
     // code_verifier 43-128 ký tự hex; code_challenge = Base64Url(SHA-256(verifier)) bỏ padding
     const verifier = randomToken(32);
     const challenge = createHash('sha256').update(verifier).digest('base64url');
-    // Cho phép ghi đè redirect qua env (một số cấu hình app Zalo bắt khớp URL đã đăng ký)
+    // Dùng chính URL webhook đã đăng ký trong app Zalo làm redirect (GET = OAuth, POST = nhận tin)
+    // → khỏi cần ô callback riêng. Ghi đè được qua env nếu app yêu cầu URL khác.
     const redirectUri =
       process.env.ZALO_OA_REDIRECT_URI ??
-      `${(process.env.PUBLIC_API_BASE_URL ?? 'http://localhost:4000').replace(/\/$/, '')}/channels/zalo-oa/oauth/callback`;
+      `${(process.env.PUBLIC_API_BASE_URL ?? 'http://localhost:4000').replace(/\/$/, '')}/webhooks/zalo`;
     const url =
       `https://oauth.zaloapp.com/v4/oa/permission?app_id=${encodeURIComponent(appId)}` +
       `&redirect_uri=${encodeURIComponent(redirectUri)}` +

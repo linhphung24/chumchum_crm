@@ -1,7 +1,8 @@
-import { BadRequestException, Controller, Get, Headers, Param, Post, Query, Req } from '@nestjs/common';
-import type { Request } from 'express';
+import { BadRequestException, Controller, Get, Headers, Param, Post, Query, Req, Res } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChannelIngestService } from '../channels/channel-ingest.service';
+import { ChannelsService } from '../channels/channels.service';
 import { EventsGateway } from '../realtime/events.gateway';
 import { NotificationsService } from '../notifications/notifications.service';
 import type { NormalizedIncomingMessage } from '../channels/channel-adapter';
@@ -12,6 +13,7 @@ export class WebhooksController {
   constructor(
     private prisma: PrismaService,
     private ingest: ChannelIngestService,
+    private channels: ChannelsService,
     private events: EventsGateway,
     private notifications: NotificationsService,
   ) {}
@@ -146,6 +148,25 @@ export class WebhooksController {
   }
 
   // ================= Zalo OA =================
+
+  /**
+   * GET /webhooks/zalo — nhận redirect từ luồng OAuth v4 cấp quyền OA
+   * (dùng chính URL webhook đã đăng ký trong app làm redirect_uri → khỏi ô callback riêng).
+   */
+  @Get('zalo')
+  async zaloOAuthRedirect(@Query('code') code: string, @Query('oa_id') oaId: string, @Query('state') state: string, @Res() res: Response) {
+    const frontend = (process.env.FRONTEND_URL ?? 'http://localhost:3000').replace(/\/$/, '');
+    if (!code || !state) {
+      // Không phải luồng OAuth (vd kiểm tra sức khoẻ) → trả OK cho an toàn
+      return res.status(200).json({ ok: true });
+    }
+    try {
+      const r = await this.channels.zaloOaOAuthCallback(code, oaId, state);
+      return res.redirect(`${frontend}/settings?zalo-oa=ok&name=${encodeURIComponent(r.name)}`);
+    } catch (err) {
+      return res.redirect(`${frontend}/settings?zalo-oa=fail&msg=${encodeURIComponent((err as Error).message)}`);
+    }
+  }
 
   @Post('zalo')
   async zaloPost(@Req() req: Request) {
