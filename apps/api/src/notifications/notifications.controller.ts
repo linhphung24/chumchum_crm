@@ -5,6 +5,17 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser, JwtUser } from '../common/decorators';
 import { NotificationsService } from './notifications.service';
 
+// Lưu ý: PushKeysDto phải khai báo TRƯỚC SubscribePushDto (tham chiếu trong metadata)
+export class PushKeysDto {
+  @IsString()
+  @IsNotEmpty()
+  p256dh: string;
+
+  @IsString()
+  @IsNotEmpty()
+  auth: string;
+}
+
 export class SubscribePushDto {
   @IsString()
   @IsNotEmpty()
@@ -14,16 +25,6 @@ export class SubscribePushDto {
   @ValidateNested()
   @Type(() => PushKeysDto)
   keys: PushKeysDto;
-}
-
-export class PushKeysDto {
-  @IsString()
-  @IsNotEmpty()
-  p256dh: string;
-
-  @IsString()
-  @IsNotEmpty()
-  auth: string;
 }
 
 export class UnsubscribePushDto {
