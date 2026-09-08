@@ -44,33 +44,46 @@ const check = (name, ok, extra = '') => {
   const sent = await api('POST', `/conversations/${conv.id}/messages`, { text: 'Smoke test gửi tin 🐹' });
   check('Gửi tin nhắn (mock)', sent.direction === 'OUT' && sent.status === 'MOCKED');
 
-  // 5) Giả lập tin nhắn đến từ Zalo OA
-  const sim = await api('POST', '/dev/simulate-incoming', {
-    channelType: 'ZALO_OA',
-    userName: 'Khách Smoke Test',
-    text: 'Xin chào từ Zalo OA!',
-  });
-  check('Giả lập tin đến (Zalo OA)', sim.ok === true);
-  const convs2 = await api('GET', '/conversations');
-  const newConv = convs2.find((c) => c.customer.name === 'Khách Smoke Test');
-  check('Hội thoại mới xuất hiện', !!newConv);
+  // 5) Giả lập tin nhắn đến từ Zalo OA (chỉ dev — /dev/* tự tắt ở production)
+  let devMode = true;
+  let newConv = null;
+  try {
+    const sim = await api('POST', '/dev/simulate-incoming', {
+      channelType: 'ZALO_OA',
+      userName: 'Khách Smoke Test',
+      text: 'Xin chào từ Zalo OA!',
+    });
+    check('Giả lập tin đến (Zalo OA)', sim.ok === true);
+    const convs2 = await api('GET', '/conversations');
+    newConv = convs2.find((c) => c.customer.name === 'Khách Smoke Test');
+    check('Hội thoại mới xuất hiện', !!newConv);
+  } catch (e) {
+    if (String(e).includes('Không khả dụng ở production')) {
+      devMode = false;
+      console.log('⏭️  /dev tắt ở production — bỏ qua các bước giả lập (bình thường)');
+    } else throw e;
+  }
 
   // 6) Phân công hội thoại
-  const users = await api('GET', '/users');
-  const assigned = await api('PATCH', `/conversations/${newConv.id}/assign`, { userId: users[0].id });
-  check('Phân công hội thoại', assigned.assignedUser?.id === users[0].id);
+  if (newConv) {
+    const users = await api('GET', '/users');
+    const assigned = await api('PATCH', `/conversations/${newConv.id}/assign`, { userId: users[0].id });
+    check('Phân công hội thoại', assigned.assignedUser?.id === users[0].id);
+  }
 
-  // 7) Comment FB: giả lập → trả lời → chuyển đơn
-  const cmt = await api('POST', '/dev/simulate-comment', { author: 'Bình Luận Test', message: 'Mình đặt 2 cái size L' });
-  check('Giả lập comment FB', !!cmt.id);
-  const replied = await api('POST', `/comments/${cmt.id}/reply`, { message: 'Dạ shop ib hỗ trợ nha' });
-  check('Trả lời comment (mock)', replied.mocked === true);
-  const converted = await api('POST', `/comments/${cmt.id}/convert`, {
-    items: [{ productName: 'Áo len pastel', variant: 'Hồng/L', quantity: 2, price: 350000 }],
-    shippingPhone: '0912345678',
-    shippingAddress: '123 Test Q1',
-  });
-  check('Chuyển comment → đơn hàng', converted.order.code.startsWith('DH-'), `đơn ${converted.order.code}`);
+  // 7) Comment FB: giả lập → trả lời → chuyển đơn (chỉ dev)
+  if (devMode) {
+    const cmt = await api('POST', '/dev/simulate-comment', { author: 'Bình Luận Test', message: 'Mình đặt 2 cái size L' });
+    check('Giả lập comment FB', !!cmt.id);
+    const replied = await api('POST', `/comments/${cmt.id}/reply`, { message: 'Dạ shop ib hỗ trợ nha' });
+    check('Trả lời comment (mock)', replied.mocked === true);
+    const converted = await api('POST', `/comments/${cmt.id}/convert`, {
+      items: [{ productName: 'Áo len pastel', variant: 'Hồng/L', quantity: 2, price: 350000 }],
+      shippingPhone: '0912345678',
+      shippingAddress: '123 Test Q1',
+    });
+    check('Chuyển comment → đơn hàng', converted.order.code.startsWith('DH-'), `đơn ${converted.order.code}`);
+  }
 
   // 8) Tạo đơn trực tiếp cho khách có sẵn
   const customers = await api('GET', '/customers');
@@ -85,9 +98,9 @@ const check = (name, ok, extra = '') => {
   const moved = await api('PATCH', `/orders/${order.id}/status`, { status: 'SHIPPING', note: 'test' });
   check('Đổi trạng thái đơn', moved.status === 'SHIPPING');
 
-  // 10) Thống kê
+  // 10) Thống kê (production không có đơn từ comment giả lập nên ngưỡng thấp hơn)
   const summary = await api('GET', '/analytics/summary');
-  check('Analytics summary', summary.totalOrders >= 4, `${summary.totalOrders} đơn`);
+  check('Analytics summary', summary.totalOrders >= (devMode ? 4 : 3), `${summary.totalOrders} đơn`);
   const revenue = await api('GET', '/analytics/revenue?days=7');
   check('Analytics revenue', Array.isArray(revenue) && revenue.length === 7);
   const byChannel = await api('GET', '/analytics/orders-by-channel');
