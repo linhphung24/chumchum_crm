@@ -138,6 +138,69 @@ export class ChannelsService {
     return result;
   }
 
+  /**
+   * Đồng bộ hội thoại gần đây từ Zalo OA (GET /v2.0/oa/chat):
+   * tạo khách + hội thoại + tin cuối (không bật thông báo đẩy — tránh ồn),
+   * hội thoại đã có thì bỏ qua. Chỉ dùng khi kết nối lần đầu.
+   */
+  async syncZaloChats(id: string) {
+    const account = await this.prisma.channelAccount.findUnique({ where: { id } });
+    if (!account || account.type !== 'ZALO_OA') throw new BadRequestException('Chỉ hỗ trợ đồng bộ cho kênh Zalo OA');
+    if (!account.credentials?.includes('accessToken')) throw new BadRequestException('Kênh chưa kết nối (thiếu access token)');
+
+    const cred = JSON.parse(account.credentials) as { accessToken?: string };
+    const json = await getJson(
+      `https://openapi.zalo.me/v2.0/oa/chat?access_token=${cred.accessToken}&offset=0&count=50`,
+    );
+    const data = json?.data as { chats?: { user_id?: string; last_message?: { message?: string; timestamp?: number } }[] } | undefined;
+    if (Number(json?.error_code ?? -1) !== 0 || !data?.chats) {
+      throw new BadRequestException(`Zalo trả lỗi: ${JSON.stringify(json).slice(0, 200)}`);
+    }
+
+    let created = 0;
+    const zaloOa = this.adapters.get('ZALO_OA');
+    for (const chat of data.chats) {
+      const externalUserId = String(chat.user_id ?? '');
+      if (!externalUserId) continue;
+      const existed = await this.prisma.channelIdentity.findUnique({
+        where: { channelAccountId_externalUserId: { channelAccountId: account.id, externalUserId } },
+      });
+      if (existed) continue;
+
+      // Tên khách: thử gọi profile, thất bại thì dùng id
+      let displayName: string | undefined;
+      try {
+        const profile = await zaloOa?.fetchUserProfile?.(account, externalUserId);
+        displayName = profile?.displayName;
+      } catch {
+        /* bỏ qua */
+      }
+      const customer = await this.prisma.customer.create({
+        data: { name: displayName ?? `Khách Zalo ${externalUserId.slice(-4)}` },
+      });
+      await this.prisma.channelIdentity.create({
+        data: { customerId: customer.id, channelAccountId: account.id, externalUserId, displayName },
+      });
+      const conv = await this.prisma.conversation.create({
+        data: { customerId: customer.id, channelAccountId: account.id, lastMessageText: chat.last_message?.message ?? '' },
+      });
+      if (chat.last_message?.message) {
+        await this.prisma.message.create({
+          data: {
+            conversationId: conv.id,
+            direction: 'IN',
+            type: 'TEXT',
+            text: chat.last_message.message,
+            status: 'SENT',
+            createdAt: chat.last_message.timestamp ? new Date(chat.last_message.timestamp * 1000) : new Date(),
+          },
+        });
+      }
+      created++;
+    }
+    return { ok: true, created, total: data.chats.length };
+  }
+
   // ================= Zalo OA — OAuth v4 PKCE (1-cú-click, cần env ZALO_OA_APP_ID + ZALO_OA_APP_SECRET) =================
   // Luồng theo tài liệu chính thức:
   //   1) GET /channels/zalo-oa/oauth/start → trả URL https://oauth.zaloapp.com/v4/oa/permission?...

@@ -57,6 +57,22 @@ export class FacebookAdapter implements ChannelAdapter {
     return { displayName: json?.name as string | undefined, avatarUrl: json?.profile_pic as string | undefined };
   }
 
+  /** Gửi ảnh/video/audio/file qua URL công khai (Graph API tự tải về) */
+  async sendAttachment(
+    account: { credentials?: string | null; externalId: string },
+    to: string,
+    att: { url: string; type: 'IMAGE' | 'VIDEO' | 'AUDIO' | 'FILE'; filename: string },
+  ): Promise<SendResult> {
+    const cred = parseCredentials<{ pageAccessToken?: string }>(account.credentials);
+    if (!cred?.pageAccessToken) return mockSendResult();
+    const type = att.type === 'IMAGE' ? 'image' : att.type === 'VIDEO' ? 'video' : att.type === 'AUDIO' ? 'audio' : 'file';
+    const json = await postJson(`https://graph.facebook.com/${GRAPH_VERSION}/me/messages?access_token=${cred.pageAccessToken}`, {
+      recipient: { id: to },
+      message: { attachment: { type, payload: { url: att.url, is_reusable: true } } },
+    });
+    return { externalId: (json?.message_id as string) ?? undefined };
+  }
+
   async testConnection(credentials: Record<string, string>): Promise<TestConnectionResult> {
     if (!credentials.pageAccessToken) return { ok: false, message: 'Chưa nhập Page Access Token' };
     try {
@@ -104,6 +120,22 @@ export class InstagramAdapter implements ChannelAdapter {
     } catch (err) {
       return { ok: false, message: `Token không hợp lệ — ${(err as Error).message}` };
     }
+  }
+
+  /** Gửi ảnh/video/file qua URL công khai (giống Messenger) */
+  async sendAttachment(
+    account: { credentials?: string | null; externalId: string },
+    to: string,
+    att: { url: string; type: 'IMAGE' | 'VIDEO' | 'AUDIO' | 'FILE'; filename: string },
+  ): Promise<SendResult> {
+    const cred = parseCredentials<{ pageAccessToken?: string }>(account.credentials);
+    if (!cred?.pageAccessToken) return mockSendResult();
+    const type = att.type === 'IMAGE' ? 'image' : att.type === 'VIDEO' ? 'video' : att.type === 'AUDIO' ? 'audio' : 'file';
+    const json = await postJson(`https://graph.facebook.com/${GRAPH_VERSION}/me/messages?access_token=${cred.pageAccessToken}`, {
+      recipient: { id: to },
+      message: { attachment: { type, payload: { url: att.url, is_reusable: true } } },
+    });
+    return { externalId: (json?.message_id as string) ?? undefined };
   }
 }
 
@@ -194,6 +226,41 @@ export class ZaloOaAdapter implements ChannelAdapter {
     const next: Record<string, string> = { ...cred, accessToken: json.access_token } as Record<string, string>;
     if (json.refresh_token) next.refreshToken = json.refresh_token; // refresh token cũ hết hiệu lực — thay bằng cái mới
     return { ok: true, message: 'Đã làm mới access token', credentials: next };
+  }
+
+  /** Gửi ảnh/video/file: upload lên Zalo nhận token → gửi message kèm attachment token */
+  async sendAttachment(
+    account: { credentials?: string | null; externalId: string },
+    to: string,
+    att: { url: string; type: 'IMAGE' | 'VIDEO' | 'AUDIO' | 'FILE'; filename: string },
+  ): Promise<SendResult> {
+    const cred = parseCredentials<{ accessToken?: string }>(account.credentials);
+    if (!cred?.accessToken) return mockSendResult();
+    const kind = att.type === 'IMAGE' ? 'image' : att.type === 'VIDEO' ? 'video' : 'file';
+
+    // 1) Upload file (multipart form-data, field "file")
+    const bytes = Buffer.from(await (await fetch(att.url)).arrayBuffer());
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array(bytes)]), att.filename);
+    const upRes = await fetch(`https://openapi.zalo.me/v2.0/oa/upload/${kind}?access_token=${cred.accessToken}`, {
+      method: 'POST',
+      body: form,
+    });
+    const up = (await upRes.json().catch(() => ({}))) as { error_code?: number; data?: { token?: string }; error_message?: string };
+    const token = up?.data?.token;
+    if (Number(up?.error_code ?? -1) !== 0 || !token) {
+      return { error: `Upload ${kind} lên Zalo lỗi: ${up?.error_message ?? JSON.stringify(up).slice(0, 150)}` };
+    }
+
+    // 2) Gửi message kèm token
+    const json = await postJson(`https://openapi.zalo.me/v2.0/oa/message?access_token=${cred.accessToken}`, {
+      recipient: { user_id: to },
+      message: { attachment: { type: kind, payload: { token } } },
+    });
+    const errorCode = Number(json?.error_code ?? -1);
+    if (errorCode !== 0) throw new Error(`Zalo OA error ${errorCode}: ${JSON.stringify(json).slice(0, 200)}`);
+    const data = json?.data as Record<string, unknown> | undefined;
+    return { externalId: (data?.message_id as string) ?? undefined };
   }
 }
 

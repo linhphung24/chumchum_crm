@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api } from '@/lib/api';
+import { api, getStoredUser } from '@/lib/api';
 import { timeAgo } from '@/lib/format';
 import type { Customer } from '@/lib/types';
 import { Avatar, EmptyState, Modal, PageHeader, Spinner } from '@/components/ui';
@@ -13,12 +13,17 @@ export default function CustomersPage() {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
+  const canDelete = ['ADMIN', 'MANAGER'].includes(getStoredUser()?.role ?? '');
+
+  function reload() {
+    setLoading(true);
+    api<Customer[]>(`/customers?q=${encodeURIComponent(q)}`).then(setCustomers).finally(() => setLoading(false));
+  }
 
   useEffect(() => {
-    const t = setTimeout(() => {
-      api<Customer[]>(`/customers?q=${encodeURIComponent(q)}`).then(setCustomers).finally(() => setLoading(false));
-    }, 250);
+    const t = setTimeout(reload, 250);
     return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
   return (
@@ -43,22 +48,41 @@ export default function CustomersPage() {
         ) : (
           <div className="card divide-y divide-brand-50 overflow-hidden">
             {customers.map((c) => (
-              <Link key={c.id} href={`/customers/${c.id}`} className="flex items-center gap-3 px-4 py-3 hover:bg-brand-50">
-                <Avatar name={c.name} src={c.avatarUrl} size={42} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="truncate text-sm font-extrabold">{c.name}</span>
-                    {parseTags(c.tags).slice(0, 2).map((t) => (
-                      <span key={t} className="chip bg-brand-100 text-brand-700">#{t}</span>
-                    ))}
+              <div key={c.id} className="group flex items-center gap-3 px-4 py-3 hover:bg-brand-50">
+                <Link href={`/customers/${c.id}`} className="flex min-w-0 flex-1 items-center gap-3">
+                  <Avatar name={c.name} src={c.avatarUrl} size={42} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="truncate text-sm font-extrabold">{c.name}</span>
+                      {parseTags(c.tags).slice(0, 2).map((t) => (
+                        <span key={t} className="chip bg-brand-100 text-brand-700">#{t}</span>
+                      ))}
+                    </div>
+                    <p className="truncate text-xs text-ink-soft">{c.phone ?? c.address ?? 'Chưa có thông tin liên hệ'}</p>
                   </div>
-                  <p className="truncate text-xs text-ink-soft">{c.phone ?? c.address ?? 'Chưa có thông tin liên hệ'}</p>
-                </div>
-                <div className="shrink-0 text-right text-[11px] text-ink-faint">
-                  <div>{c._count?.orders ?? 0} đơn</div>
-                  <div>{timeAgo(c.updatedAt)}</div>
-                </div>
-              </Link>
+                  <div className="shrink-0 text-right text-[11px] text-ink-faint">
+                    <div>{c._count?.orders ?? 0} đơn</div>
+                    <div>{timeAgo(c.updatedAt)}</div>
+                  </div>
+                </Link>
+                {canDelete && (
+                  <button
+                    title="Xoá khách hàng (kèm toàn bộ hội thoại & tin nhắn)"
+                    className="shrink-0 rounded-lg p-1.5 text-ink-faint opacity-0 transition-opacity hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+                    onClick={async () => {
+                      if (!window.confirm(`Xoá khách "${c.name}"? Toàn bộ hội thoại, tin nhắn của khách này cũng bị xoá (đơn hàng sẽ được giữ).`)) return;
+                      try {
+                        await api(`/customers/${c.id}`, { method: 'DELETE' });
+                        reload();
+                      } catch (err) {
+                        alert(`Xoá thất bại: ${(err as Error).message}`);
+                      }
+                    }}
+                  >
+                    🗑
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         )}

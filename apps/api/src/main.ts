@@ -2,6 +2,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { static as serveStatic } from 'express';
 import { join } from 'path';
+import { mkdirSync } from 'fs';
 import { AppModule } from './app.module';
 import { DomainsService } from './domains/domains.service';
 import type { Express } from 'express';
@@ -40,6 +41,11 @@ async function bootstrap() {
   expressApp.get('/', async (_req, res) => {
     res.type('html').send(await domains.rootHtml());
   });
+
+  // File đính kèm chat (ảnh/video/tệp) — lưu ở UPLOAD_DIR, phục vụ công khai qua /uploads
+  const uploadDir = process.env.UPLOAD_DIR ?? './uploads';
+  mkdirSync(uploadDir, { recursive: true });
+  expressApp.use('/uploads', serveStatic(join(process.cwd(), uploadDir)));
 
   await app.init();
   await app.listen(port, '0.0.0.0');

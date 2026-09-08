@@ -57,6 +57,12 @@ export interface ChannelAdapter {
     /** credentials đầy đủ sau khi làm mới (đã quay vòng refresh token nếu nhà cung cấp trả về) */
     credentials?: Record<string, string>;
   }>;
+  /** Gửi file đính kèm (ảnh/video/file) tới khách. Không hỗ trợ → lưu nội bộ, status MOCKED. */
+  sendAttachment?(
+    account: { credentials?: string | null; externalId: string },
+    toExternalUserId: string,
+    attachment: { url: string; type: 'IMAGE' | 'VIDEO' | 'AUDIO' | 'FILE'; filename: string },
+  ): Promise<SendResult>;
 }
 
 export function mockSendResult(): SendResult {

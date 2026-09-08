@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { api } from '@/lib/api';
+import { api, API_URL } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { clockTime, money, moneyFull, parseTags, timeAgo } from '@/lib/format';
 import {
@@ -75,6 +75,14 @@ export default function InboxPage() {
     await api(`/conversations/${id}/read`, { method: 'PATCH' }).catch(() => {});
     setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, unreadCount: 0 } : c)));
   }, []);
+
+  /** Tải lại tin nhắn của hội thoại đang mở (dùng sau khi gửi tệp đính kèm) */
+  const loadMessages = useCallback(async (id: string | null) => {
+    if (!id) return;
+    const msgs = await api<Message[]>(`/conversations/${id}/messages`).catch(() => null);
+    if (msgs) setMessages(msgs);
+    await loadConversations();
+  }, [loadConversations]);
 
   // Mở hội thoại từ URL ?c=
   useEffect(() => {
@@ -241,9 +249,7 @@ export default function InboxPage() {
 
             <div className="border-t border-brand-100 bg-white px-3 py-2.5">
               <div className="flex items-center gap-2">
-                <span className="text-lg">😊</span>
-                <span className="text-lg">📎</span>
-                <ChatInput onSend={sendMessage} />
+                <ChatInput onSend={sendMessage} onUploaded={() => void loadMessages(activeId)} conversationId={activeId ?? ''} />
               </div>
             </div>
           </>
@@ -304,10 +310,7 @@ function ChatArea({ messages, onSend }: { messages: Message[]; onSend: (t: strin
                 m.direction === 'OUT' ? 'rounded-br-md bg-brand-500 text-white' : 'rounded-bl-md bg-white text-ink'
               }`}
             >
-              {m.attachmentUrl && m.type !== 'TEXT' ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={m.attachmentUrl} alt="đính kèm" className="mb-1 max-h-48 rounded-lg object-cover" />
-              ) : null}
+              <AttachmentView url={m.attachmentUrl} type={m.type} out={m.direction === 'OUT'} />
               {m.text && <p className="whitespace-pre-wrap break-words">{m.text}</p>}
               <div className={`mt-0.5 text-right text-[10px] ${m.direction === 'OUT' ? 'text-white/70' : 'text-ink-faint'}`}>
                 {clockTime(m.createdAt)}
@@ -323,11 +326,84 @@ function ChatArea({ messages, onSend }: { messages: Message[]; onSend: (t: strin
   );
 }
 
-function ChatInput({ onSend }: { onSend: (t: string) => Promise<void> }) {
+/** Hiển thị file đính kèm theo loại: ảnh/sticker, video, audio, tệp (tải về) */
+function AttachmentView({ url, type, out }: { url?: string | null; type: string; out: boolean }) {
+  if (!url || type === 'TEXT') return null;
+  const full = url.startsWith('http') ? url : `${API_URL}${url}`;
+  if (type === 'IMAGE' || type === 'STICKER') {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={full} alt="đính kèm" className="mb-1 max-h-56 rounded-lg object-cover" loading="lazy" />;
+  }
+  if (type === 'VIDEO') {
+    return (
+      <video controls preload="metadata" className="mb-1 max-h-56 rounded-lg">
+        <source src={full} />
+      </video>
+    );
+  }
+  if (type === 'AUDIO') {
+    return <audio controls preload="metadata" className="mb-1 w-52" src={full} />;
+  }
+  const name = full.split('/').pop() ?? 'tệp';
+  return (
+    <a
+      href={full}
+      download
+      className={`mb-1 flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-bold underline ${out ? 'bg-white/15' : 'bg-brand-50 text-brand-700'}`}
+    >
+      📎 <span className="max-w-40 truncate">{decodeURIComponent(name)}</span>
+    </a>
+  );
+}
+
+function ChatInput({ onSend, onUploaded, conversationId }: { onSend: (t: string) => Promise<void>; onUploaded: () => void; conversationId: string }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function uploadFile(file: File) {
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const token = localStorage.getItem('cc_at') ?? '';
+      const res = await fetch(`${API_URL}/conversations/${conversationId}/attachments`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      const json = (await res.json().catch(() => null)) as { message?: string; statusCode?: number } | null;
+      if (!res.ok) throw new Error(json?.message ?? `Lỗi tải tệp (${res.status})`);
+      setText('');
+      onUploaded();
+    } catch (err) {
+      alert(`Gửi tệp thất bại: ${(err as Error).message}`);
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
   return (
     <div className="flex flex-1 items-center gap-2">
+      <input
+        ref={fileRef}
+        type="file"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void uploadFile(f);
+        }}
+      />
+      <button
+        className="btn-secondary shrink-0 px-3"
+        title="Gửi ảnh / tệp đính kèm"
+        disabled={uploading}
+        onClick={() => fileRef.current?.click()}
+      >
+        {uploading ? <Spinner className="border-brand-300 border-t-brand-600" /> : '📎'}
+      </button>
       <input
         className="input flex-1"
         placeholder="Nhập tin nhắn..."

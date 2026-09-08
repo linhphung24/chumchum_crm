@@ -590,25 +590,46 @@ function ChannelWizard({
               </button>
             )}
             {type === 'ZALO_OA' && editing && (
-              <button
-                className="btn-secondary mt-2 w-full py-2 text-sm"
-                disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  setError('');
-                  setTestResult(null);
-                  try {
-                    const r = await api<{ ok: boolean; message?: string }>(`/channel-accounts/${editing.id}/refresh`, { method: 'POST' });
-                    setTestResult({ ok: r.ok, message: r.ok ? `🔄 ${r.message}` : r.message });
-                  } catch (err) {
-                    setError((err as Error).message);
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                🔄 Làm mới access token ngay
-              </button>
+              <div className="space-y-2">
+                <button
+                  className="btn-secondary w-full py-2 text-sm"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    setError('');
+                    setTestResult(null);
+                    try {
+                      const r = await api<{ ok: boolean; message?: string }>(`/channel-accounts/${editing.id}/refresh`, { method: 'POST' });
+                      setTestResult({ ok: r.ok, message: r.ok ? `🔄 ${r.message}` : r.message });
+                    } catch (err) {
+                      setError((err as Error).message);
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  🔄 Làm mới access token ngay
+                </button>
+                <button
+                  className="btn-secondary w-full py-2 text-sm"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    setError('');
+                    setTestResult(null);
+                    try {
+                      const r = await api<{ ok: boolean; created: number; total: number }>(`/channel-accounts/${editing.id}/sync-chats`, { method: 'POST' });
+                      setTestResult({ ok: true, message: `⬇️ Đã đồng bộ ${r.created}/${r.total} hội thoại từ Zalo về inbox` });
+                    } catch (err) {
+                      setError((err as Error).message);
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  ⬇️ Đồng bộ hội thoại gần đây từ Zalo
+                </button>
+              </div>
             )}
           </div>
 

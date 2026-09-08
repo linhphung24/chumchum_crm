@@ -37,6 +37,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-chumchum}:${POSTGRES_PASSWORD:-chumchum}@postgres:5432/${POSTGRES_DB:-chumchum}?schema=public
     ports:
       - "127.0.0.1:4000:4000"
+    volumes:
+      # File đính kèm chat (ảnh/video/tệp) — sống qua các lần deploy
+      - uploads:/app/apps/api/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,3 +61,4 @@ services:
 
 volumes:
   pgdata:
+  uploads:
