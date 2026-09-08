@@ -175,11 +175,35 @@ export class WebhooksController {
     if (!body?.event_name?.startsWith('user_send')) return { ok: true };
 
     const attachment = this.extractZaloAttachment(body);
+    const externalUserId = body.sender?.id ?? '';
+
+    // Luôn dồn tin về tài khoản ZALO_OA đã kết nối (ưu tiên cái có token) — tránh tách thành
+    // hội thoại rời rạc giữa tài khoản OAuth và tài khoản "default".
+    const account = await this.prisma.channelAccount.findFirst({
+      where: { type: 'ZALO_OA' },
+      orderBy: [{ isActive: 'desc' }, { createdAt: 'asc' }],
+    });
+    const accountExternalId = process.env.ZALO_OA_ID || account?.externalId || 'default';
+
+    // Webhook Zalo nhiều khi không kèm tên/ảnh người gửi → lấy qua API profile nếu đã kết nối
+    let displayName = (body.info as { sender_name?: string } | undefined)?.sender_name;
+    let avatarUrl = (body.info as { sender_avatar?: string } | undefined)?.sender_avatar;
+    if ((!displayName || !avatarUrl) && externalUserId && account?.credentials) {
+      try {
+        const profile = await this.channels.getAdapter('ZALO_OA').fetchUserProfile?.(account, externalUserId);
+        displayName = displayName ?? profile?.displayName;
+        avatarUrl = avatarUrl ?? profile?.avatarUrl;
+      } catch {
+        /* profile là tuỳ chọn — bỏ qua nếu lỗi */
+      }
+    }
+
     await this.ingest.handleIncoming({
       channelType: 'ZALO_OA',
-      accountExternalId: process.env.ZALO_OA_ID ?? 'default',
-      externalUserId: body.sender?.id ?? '',
-      userDisplayName: body.info?.sender_name,
+      accountExternalId,
+      externalUserId,
+      userDisplayName: displayName,
+      userAvatarUrl: avatarUrl,
       text: body.message?.text,
       attachmentUrl: attachment?.url,
       attachmentType: attachment?.type,

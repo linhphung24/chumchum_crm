@@ -294,6 +294,8 @@ function ChannelsTab() {
       {(Object.keys(CHANNEL_GUIDES) as ChannelType[]).map((type) => {
         const m = meta.find((x) => x.type === type);
         const accs = accounts.filter((a) => a.type === type);
+        // Ưu tiên tài khoản đã có token (nhiều account cùng loại: OAuth + default cũ)
+        const main = accs.find((a) => a.hasCredentials) ?? accs[0];
         return (
           <div key={type} className="card p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -303,26 +305,26 @@ function ChannelsTab() {
                 {type === 'ZALO_PERSONAL' && <Badge className="bg-red-100 text-red-700">Không chính thức</Badge>}
               </div>
               <div className="flex gap-2">
-                {accs.length > 0 && (
+                {main && (
                   <button
                     className="btn-secondary px-3 py-1.5 text-xs"
                     onClick={async () => {
-                      await api(`/channel-accounts/${accs[0].id}`, { method: 'PATCH', body: { isActive: !accs[0].isActive } });
+                      await api(`/channel-accounts/${main.id}`, { method: 'PATCH', body: { isActive: !main.isActive } });
                       load();
                     }}
                   >
-                    {accs[0].isActive ? '⏸ Tạm tắt' : '▶️ Bật'}
+                    {main.isActive ? '⏸ Tạm tắt' : '▶️ Bật'}
                   </button>
                 )}
                 <button
                   className="btn-primary px-3 py-1.5 text-xs"
                   onClick={() => {
                     setWizType(type);
-                    setEditing(accs[0] ?? null);
+                    setEditing(main ?? null);
                     setOpen(true);
                   }}
                 >
-                  ⚙️ {accs.length && accs[0].hasCredentials ? 'Sửa kết nối' : 'Kết nối'}
+                  ⚙️ {main?.hasCredentials ? 'Sửa kết nối' : 'Kết nối'}
                 </button>
               </div>
             </div>

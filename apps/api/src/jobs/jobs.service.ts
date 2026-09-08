@@ -12,7 +12,8 @@ import { createHmac } from 'crypto';
  * Background jobs:
  * 1) Đồng bộ đơn Shopee mỗi 30 phút (nếu đã cấu hình credentials)
  * 2) Làm mới access token Zalo OA mỗi ngày (cần Refresh Token + App ID) — tránh hết hạn 45 ngày
- * 3) Dọn webhook log cũ mỗi ngày
+ * 3) Đồng bộ hội thoại Zalo OA mỗi 15 phút — staff trả lời trực tiếp trên app Zalo vẫn về kịp CRM
+ * 4) Dọn webhook log cũ mỗi ngày
  */
 @Injectable()
 export class JobsService {
@@ -24,6 +25,21 @@ export class JobsService {
     private channels: ChannelsService,
     private events: EventsGateway,
   ) {}
+
+  /** Đồng bộ Zalo OA: kéo tin mới nhất mỗi hội thoại về (chống trùng tự động) */
+  @Cron('*/15 * * * *')
+  async syncZaloOaChats() {
+    const accounts = await this.prisma.channelAccount.findMany({ where: { type: 'ZALO_OA', isActive: true } });
+    for (const account of accounts) {
+      if (!account.credentials?.includes('accessToken')) continue;
+      try {
+        const r = await this.channels.syncZaloChats(account.id);
+        if (r.created) this.logger.log(`Zalo OA (${account.name}): đồng bộ thêm ${r.created} tin mới`);
+      } catch (err) {
+        this.logger.warn(`Zalo OA (${account.name}) đồng bộ lỗi: ${(err as Error).message}`);
+      }
+    }
+  }
 
   @Cron(CronExpression.EVERY_DAY_AT_2AM)
   async refreshZaloOaTokens() {

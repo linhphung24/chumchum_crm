@@ -150,6 +150,7 @@ export class ChannelIngestService {
       sendResult = await adapter.sendText(account, identity?.externalUserId ?? 'unknown', text);
     } catch (err) {
       sendResult = { error: String((err as Error).message ?? err) };
+      this.logger.warn(`Gửi tin qua ${CHANNEL_LABELS[account.type as keyof typeof CHANNEL_LABELS]} (${account.name}) lỗi: ${sendResult.error}`);
     }
 
     const message = await this.prisma.message.create({

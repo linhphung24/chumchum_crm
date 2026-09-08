@@ -7,6 +7,7 @@ import { randomToken } from '../common/utils';
 import { FacebookAdapter, InstagramAdapter, ShopeeAdapter, TikTokAdapter, ZaloOaAdapter, ZaloPersonalAdapter } from './adapters';
 import { getJson } from './channel-adapter';
 import type { ChannelAdapter } from './channel-adapter';
+import { ChannelIngestService } from './channel-ingest.service';
 import type { ChannelType } from '../common/constants';
 
 @Injectable()
@@ -16,6 +17,7 @@ export class ChannelsService {
   constructor(
     private prisma: PrismaService,
     private events: EventsGateway,
+    private ingest: ChannelIngestService,
     zaloOa: ZaloOaAdapter,
     zaloPersonal: ZaloPersonalAdapter,
     facebook: FacebookAdapter,
@@ -139,9 +141,11 @@ export class ChannelsService {
   }
 
   /**
-   * Đồng bộ hội thoại gần đây từ Zalo OA (GET /v2.0/oa/chat):
-   * tạo khách + hội thoại + tin cuối (không bật thông báo đẩy — tránh ồn),
-   * hội thoại đã có thì bỏ qua. Chỉ dùng khi kết nối lần đầu.
+   * Đồng bộ hội thoại Zalo OA (GET /v2.0/oa/chat): kéo danh sách chat gần đây,
+   * chaque chat → bơm vào pipeline ingest (chống trùng bằng externalMessageId
+   * `zalo-sync-<user>-<ts>`, tự lấy tên/ảnh khách qua API profile).
+   * Dùng khi mới kết nối + cron định kỳ (staff trả lời trực tiếp trên app Zalo vẫn về kịp).
+   * Lưu ý: Zalo chỉ cho lấy tin MỚI NHẤT của mỗi hội thoại — không có API lịch sử đầy đủ.
    */
   async syncZaloChats(id: string) {
     const account = await this.prisma.channelAccount.findUnique({ where: { id } });
@@ -149,56 +153,57 @@ export class ChannelsService {
     if (!account.credentials?.includes('accessToken')) throw new BadRequestException('Kênh chưa kết nối (thiếu access token)');
 
     const cred = JSON.parse(account.credentials) as { accessToken?: string };
-    const json = await getJson(
-      `https://openapi.zalo.me/v2.0/oa/chat?access_token=${cred.accessToken}&offset=0&count=50`,
-    );
-    const data = json?.data as { chats?: { user_id?: string; last_message?: { message?: string; timestamp?: number } }[] } | undefined;
-    if (Number(json?.error_code ?? -1) !== 0 || !data?.chats) {
-      throw new BadRequestException(`Zalo trả lỗi: ${JSON.stringify(json).slice(0, 200)}`);
+    const allChats: { user_id?: string; last_message?: { message?: string; timestamp?: number } }[] = [];
+    for (const offset of [0, 50, 100]) {
+      const json = await getJson(
+        `https://openapi.zalo.me/v2.0/oa/chat?access_token=${cred.accessToken}&offset=${offset}&count=50`,
+      ).catch(() => null);
+      const data = json?.data as { chats?: typeof allChats } | undefined;
+      if (Number(json?.error_code ?? -1) !== 0 || !data?.chats?.length) break;
+      allChats.push(...data.chats);
+      if (data.chats.length < 50) break;
     }
 
-    let created = 0;
     const zaloOa = this.adapters.get('ZALO_OA');
-    for (const chat of data.chats) {
+    let created = 0;
+    for (const chat of allChats) {
       const externalUserId = String(chat.user_id ?? '');
-      if (!externalUserId) continue;
-      const existed = await this.prisma.channelIdentity.findUnique({
-        where: { channelAccountId_externalUserId: { channelAccountId: account.id, externalUserId } },
-      });
-      if (existed) continue;
+      const text = chat.last_message?.message;
+      const ts = chat.last_message?.timestamp;
+      if (!externalUserId || !text || !ts) continue;
 
-      // Tên khách: thử gọi profile, thất bại thì dùng id
+      // Làm giàu tên/ảnh (hội thoại đã có tên rồi thì bỏ qua cho nhẹ)
       let displayName: string | undefined;
-      try {
-        const profile = await zaloOa?.fetchUserProfile?.(account, externalUserId);
-        displayName = profile?.displayName;
-      } catch {
-        /* bỏ qua */
+      let avatarUrl: string | undefined;
+      const identity = await this.prisma.channelIdentity.findUnique({
+        where: { channelAccountId_externalUserId: { channelAccountId: account.id, externalUserId } },
+        include: { customer: { select: { name: true } } },
+      });
+      const needsProfile = !identity || identity.customer.name.startsWith('Khách');
+      if (needsProfile && account.credentials) {
+        try {
+          const profile = await zaloOa?.fetchUserProfile?.(account, externalUserId);
+          displayName = profile?.displayName;
+          avatarUrl = profile?.avatarUrl;
+        } catch {
+          /* bỏ qua */
+        }
       }
-      const customer = await this.prisma.customer.create({
-        data: { name: displayName ?? `Khách Zalo ${externalUserId.slice(-4)}` },
+
+      const result = await this.ingest.handleIncoming({
+        channelType: 'ZALO_OA',
+        accountExternalId: account.externalId,
+        accountName: account.name,
+        externalUserId,
+        userDisplayName: displayName,
+        userAvatarUrl: avatarUrl,
+        text,
+        externalMessageId: `zalo-sync-${externalUserId}-${ts}`,
+        timestamp: new Date(ts * 1000),
       });
-      await this.prisma.channelIdentity.create({
-        data: { customerId: customer.id, channelAccountId: account.id, externalUserId, displayName },
-      });
-      const conv = await this.prisma.conversation.create({
-        data: { customerId: customer.id, channelAccountId: account.id, lastMessageText: chat.last_message?.message ?? '' },
-      });
-      if (chat.last_message?.message) {
-        await this.prisma.message.create({
-          data: {
-            conversationId: conv.id,
-            direction: 'IN',
-            type: 'TEXT',
-            text: chat.last_message.message,
-            status: 'SENT',
-            createdAt: chat.last_message.timestamp ? new Date(chat.last_message.timestamp * 1000) : new Date(),
-          },
-        });
-      }
-      created++;
+      if (result) created++;
     }
-    return { ok: true, created, total: data.chats.length };
+    return { ok: true, created, total: allChats.length };
   }
 
   // ================= Zalo OA — OAuth v4 PKCE (1-cú-click, cần env ZALO_OA_APP_ID + ZALO_OA_APP_SECRET) =================
