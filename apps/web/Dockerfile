@@ -16,10 +16,11 @@ RUN npm run build -w apps/web
 
 # ---------- RUNTIME (standalone, không cần node_modules đầy đủ) ----------
 FROM node:20-alpine
-WORKDIR /app/apps/web
 ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
-COPY --from=build /app/apps/web/.next/standalone ./
-COPY --from=build /app/apps/web/.next/static ./apps/web/.next/static
-COPY --from=build /app/apps/web/public ./apps/web/public
+# Standalone giữ nguyên cấu trúc monorepo (app/apps/web/server.js) → chép về đúng /app
+COPY --from=build /app/apps/web/.next/standalone /app
+COPY --from=build /app/apps/web/.next/static /app/apps/web/.next/static
+COPY --from=build /app/apps/web/public /app/apps/web/public
+WORKDIR /app/apps/web
 EXPOSE 3000
 CMD ["node", "server.js"]
