@@ -37,7 +37,12 @@ export default function DashboardPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-6xl p-4 md:p-6">
-        <PageHeader title="Tổng quan" subtitle="Số liệu 7 ngày gần nhất" />
+        <PageHeader title="Tổng quan" subtitle="Số liệu 7 ngày gần nhất" actions={
+          <Link href="/analytics" className="btn-secondary hidden md:inline-flex">📈 Xem số liệu chi tiết</Link>
+        } />
+        <Link href="/analytics" className="mb-3 flex items-center justify-between rounded-2xl border border-brand-100 bg-white px-4 py-3 text-sm font-bold text-ink md:hidden">
+          📈 Xem số liệu chi tiết <span className="text-ink-faint">→</span>
+        </Link>
 
         {loading ? (
           <div className="card"><SkeletonRows rows={4} /></div>

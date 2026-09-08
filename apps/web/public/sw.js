@@ -1,6 +1,6 @@
-/* Service worker tối giản: cache app shell để mở nhanh, KHÔNG cache API/socket */
-const CACHE = 'chumchum-v1';
-const PRECACHE = ['/', '/login', '/manifest.webmanifest', '/icon.svg'];
+/* Service worker: cache app shell để mở nhanh (KHÔNG cache API/socket) + Web Push */
+const CACHE = 'chumchum-v2';
+const PRECACHE = ['/', '/login', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -35,5 +35,43 @@ self.addEventListener('fetch', (event) => {
         return res;
       })
       .catch(() => caches.match(event.request).then((hit) => hit ?? caches.match('/'))),
+  );
+});
+
+// ================= Web Push =================
+
+self.addEventListener('push', (event) => {
+  let payload = { title: '🐹 ChumChum CRM', body: 'Bạn có thông báo mới', url: '/inbox' };
+  try {
+    payload = { ...payload, ...event.data.json() };
+  } catch {
+    /* payload không phải JSON → dùng mặc định */
+  }
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: payload.url ?? 'chumchum',
+      data: { url: payload.url ?? '/inbox' },
+    }),
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url ?? '/inbox';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      // Ưu tiên focus cửa sổ đang mở rồi điều hướng tới đích
+      for (const client of list) {
+        if ('focus' in client) {
+          client.focus();
+          if ('navigate' in client) client.navigate(url).catch(() => undefined);
+          return;
+        }
+      }
+      return self.clients.openWindow(url);
+    }),
   );
 });

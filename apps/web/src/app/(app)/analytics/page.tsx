@@ -128,7 +128,8 @@ export default function AnalyticsPage() {
 
             <div className="card overflow-hidden">
               <h2 className="px-4 pt-4 text-sm font-bold">Hiệu suất nhân viên</h2>
-              <table className="mt-2 w-full text-sm">
+              <div className="overflow-x-auto">
+                <table className="mt-2 w-full min-w-[480px] text-sm">
                 <thead>
                   <tr className="border-b border-brand-100 text-left text-xs font-extrabold uppercase text-ink-faint">
                     <th className="px-4 py-2">Nhân viên</th>
@@ -148,6 +149,7 @@ export default function AnalyticsPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
         )}

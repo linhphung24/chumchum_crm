@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api, getStoredUser, logout } from '@/lib/api';
+import { disablePush, enablePush, getPushState, type PushState } from '@/lib/push';
 import { ROLE_LABELS, type ChannelAccount, type ChannelMeta, type ChannelType, type Role, type User } from '@/lib/types';
 import { Badge, Modal, PageHeader, Spinner } from '@/components/ui';
 import { ChannelPill } from '@/components/charts';
@@ -27,7 +28,7 @@ export default function SettingsPage() {
           </div>
         } />
 
-        <div className="mb-4 flex gap-1.5">
+        <div className="mb-4 flex flex-wrap gap-1.5">
           {TABS.map((t) => (
             <button
               key={t.key}
@@ -39,11 +40,60 @@ export default function SettingsPage() {
           ))}
         </div>
 
+        <NotificationsCard />
+
         {tab === 'channels' && <ChannelsTab />}
         {tab === 'users' && <UsersTab canEdit={me?.role === 'ADMIN'} meId={me?.id} />}
         {tab === 'trello' && <TrelloTab />}
 
         <ChangePasswordModal open={pwOpen} onClose={() => setPwOpen(false)} onDone={() => { setMe(getStoredUser()); }} />
+      </div>
+    </div>
+  );
+}
+
+/** Đăng ký Web Push: nhận thông báo tin nhắn/comment mới ngay trên điện thoại (qua PWA) */
+function NotificationsCard() {
+  const [state, setState] = useState<PushState | 'loading'>('loading');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    getPushState()
+      .then(setState)
+      .catch(() => setState('off'));
+  }, []);
+
+  async function toggle() {
+    setBusy(true);
+    try {
+      setState(await (state === 'on' ? disablePush() : enablePush()));
+    } catch {
+      setState(await getPushState().catch(() => 'off'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const info: Record<PushState, string> = {
+    on: '✅ Đang bật — bạn sẽ nhận thông báo khi có tin nhắn / bình luận mới.',
+    off: 'Chưa bật. Bật để nhận thông báo ngay trên điện thoại khi khách nhắn tin.',
+    denied: '⚠️ Trình duyệt đang chặn thông báo — vào Cài đặt trình duyệt → cho phép Thông báo cho trang này, rồi bật lại.',
+    unsupported: '⚠️ Thiết bị/trình duyệt chưa hỗ trợ push (iOS cần "Thêm vào màn hình chính" trước).',
+    'no-vapid': '⚠️ Server chưa cấu hình VAPID — chạy `npm run gen:vapid -w apps/api` và thêm 2 biến VAPID vào .env.',
+  };
+
+  return (
+    <div className="card mb-4 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-extrabold">🔔 Thông báo trên điện thoại</h2>
+          <p className="mt-0.5 text-xs leading-relaxed text-ink-soft">{state === 'loading' ? 'Đang kiểm tra…' : info[state]}</p>
+        </div>
+        {state !== 'loading' && state !== 'no-vapid' && state !== 'unsupported' && (
+          <button className={state === 'on' ? 'btn-secondary' : 'btn-primary'} disabled={busy || state === 'denied'} onClick={toggle}>
+            {busy ? <Spinner className="border-white/40 border-t-white" /> : state === 'on' ? 'Tắt thông báo' : '🔔 Bật thông báo'}
+          </button>
+        )}
       </div>
     </div>
   );

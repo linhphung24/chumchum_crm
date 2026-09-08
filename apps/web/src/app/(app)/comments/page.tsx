@@ -196,19 +196,19 @@ function ConvertModal({
           {rows.map((r, i) => (
             <div key={i} className="grid grid-cols-12 gap-2">
               <input
-                className="input col-span-6"
+                className="input col-span-12 sm:col-span-6"
                 placeholder="Sản phẩm"
                 value={r.productName}
                 onChange={(e) => setRows((prev) => prev.map((p, j) => (j === i ? { ...p, productName: e.target.value } : p)))}
               />
               <input
-                className="input col-span-2"
+                className="input col-span-4 sm:col-span-2"
                 type="number" min={1} placeholder="SL"
                 value={r.quantity}
                 onChange={(e) => setRows((prev) => prev.map((p, j) => (j === i ? { ...p, quantity: Number(e.target.value) } : p)))}
               />
               <input
-                className="input col-span-3"
+                className="input col-span-7 sm:col-span-3"
                 type="number" min={0} placeholder="Giá (đ)"
                 value={r.price || ''}
                 onChange={(e) => setRows((prev) => prev.map((p, j) => (j === i ? { ...p, price: Number(e.target.value) } : p)))}

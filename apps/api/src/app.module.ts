@@ -12,6 +12,7 @@ import { CommentsModule } from './comments/comments.module';
 import { OrdersModule } from './orders/orders.module';
 import { TrelloModule } from './trello/trello.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { DevModule } from './dev/dev.module';
 import { JobsModule } from './jobs/jobs.module';
@@ -31,6 +32,7 @@ import { JobsModule } from './jobs/jobs.module';
     OrdersModule,
     TrelloModule,
     AnalyticsModule,
+    NotificationsModule,
     RealtimeModule,
     DevModule,
     JobsModule,

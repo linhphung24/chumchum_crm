@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChannelIngestService } from '../channels/channel-ingest.service';
 import { EventsGateway } from '../realtime/events.gateway';
+import { NotificationsService } from '../notifications/notifications.service';
 import type { NormalizedIncomingMessage } from '../channels/channel-adapter';
 import { hmacSha256Hex } from '../common/utils';
 
@@ -12,6 +13,7 @@ export class WebhooksController {
     private prisma: PrismaService,
     private ingest: ChannelIngestService,
     private events: EventsGateway,
+    private notifications: NotificationsService,
   ) {}
 
   // ================= Meta verify (Messenger / Instagram) =================
@@ -135,6 +137,11 @@ export class WebhooksController {
       },
     });
     this.events.emitCommentNew({ comment });
+    void this.notifications.notifyAll({
+      title: `🗣️ ${comment.authorName} vừa bình luận`,
+      body: (comment.message ?? '').slice(0, 120),
+      url: '/comments',
+    });
     return comment;
   }
 

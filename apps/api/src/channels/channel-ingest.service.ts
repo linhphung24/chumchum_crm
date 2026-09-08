@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EventsGateway } from '../realtime/events.gateway';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CHANNEL_LABELS } from '../common/constants';
 import { ChannelAdapter, NormalizedIncomingMessage } from './channel-adapter';
 
@@ -15,6 +16,7 @@ export class ChannelIngestService {
   constructor(
     private prisma: PrismaService,
     private events: EventsGateway,
+    private notifications: NotificationsService,
   ) {}
 
   async handleIncoming(raw: NormalizedIncomingMessage) {
@@ -114,6 +116,15 @@ export class ChannelIngestService {
 
     this.events.emitMessageNew({ conversationId: conversation.id, message });
     this.events.emitConversationUpdated({ conversation });
+    // Thông báo push cho các thiết bị đã đăng ký (người bán trên điện thoại)
+    const customerName = await this.prisma.customer
+      .findUnique({ where: { id: conversation.customerId }, select: { name: true } })
+      .then((c) => c?.name ?? 'Khách');
+    void this.notifications.notifyAll({
+      title: `💬 ${customerName} · ${CHANNEL_LABELS[msg.channelType]}`,
+      body: msg.text?.slice(0, 120) ?? `[${labelOf(msg.attachmentType ?? 'IMAGE')}]`,
+      url: '/inbox',
+    });
     this.logger.log(`Tin mới từ ${CHANNEL_LABELS[msg.channelType]}: ${(msg.text ?? '[media]').slice(0, 50)}`);
     return { conversation, message };
   }

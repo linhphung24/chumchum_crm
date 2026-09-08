@@ -27,6 +27,7 @@ model User {
   assignedConversations Conversation[] @relation("AssignedConversations")
   createdOrders         Order[]        @relation("OrderCreator")
   orderEvents           OrderEvent[]
+  pushSubscriptions     PushSubscription[]
 }
 
 model RefreshToken {
@@ -37,6 +38,20 @@ model RefreshToken {
   expiresAt DateTime
   revokedAt DateTime?
   createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// Đăng ký Web Push (PWA) của từng người dùng — mỗi thiết bị 1 dòng
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }

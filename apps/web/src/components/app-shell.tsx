@@ -14,8 +14,8 @@ const NAV = [
   { href: '/comments', label: 'Bình luận', icon: '🗣️' },
   { href: '/orders', label: 'Đơn', icon: '🛒' },
   { href: '/customers', label: 'Khách', icon: '👥' },
-  { href: '/analytics', label: 'Số liệu', icon: '📈', desktopOnly: true },
-  { href: '/settings', label: 'Cài đặt', icon: '⚙️', desktopOnly: true },
+  { href: '/analytics', label: 'Số liệu', icon: '📈', desktopOnly: true }, // mobile vào từ trang Tổng quan
+  { href: '/settings', label: 'Cài đặt', icon: '⚙️' },
 ];
 
 interface StoredUser {
