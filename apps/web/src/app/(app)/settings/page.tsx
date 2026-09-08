@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { api, getStoredUser, logout, API_URL } from '@/lib/api';
 import { disablePush, enablePush, getPushState, type PushState } from '@/lib/push';
-import { ROLE_LABELS, type ChannelAccount, type ChannelMeta, type ChannelType, type Role, type User } from '@/lib/types';
+import { ROLE_LABELS, CHANNEL_LABELS, type ChannelAccount, type ChannelMeta, type ChannelType, type Role, type User } from '@/lib/types';
 import { Badge, Modal, PageHeader, Spinner } from '@/components/ui';
 import { ChannelPill } from '@/components/charts';
 
@@ -269,6 +269,7 @@ function ChannelsTab() {
   const [accounts, setAccounts] = useState<ChannelAccount[]>([]);
   const [meta, setMeta] = useState<ChannelMeta[]>([]);
   const [open, setOpen] = useState(false);
+  const [wizType, setWizType] = useState<ChannelType>('ZALO_OA');
   const [editing, setEditing] = useState<ChannelAccount | null>(null);
 
   async function load() {
@@ -305,7 +306,14 @@ function ChannelsTab() {
                     {accs[0].isActive ? '⏸ Tạm tắt' : '▶️ Bật'}
                   </button>
                 )}
-                <button className="btn-primary px-3 py-1.5 text-xs" onClick={() => { setEditing(accs[0] ?? null); setOpen(true); }}>
+                <button
+                  className="btn-primary px-3 py-1.5 text-xs"
+                  onClick={() => {
+                    setWizType(type);
+                    setEditing(accs[0] ?? null);
+                    setOpen(true);
+                  }}
+                >
                   ⚙️ {accs.length && accs[0].hasCredentials ? 'Sửa kết nối' : 'Kết nối'}
                 </button>
               </div>
@@ -345,6 +353,7 @@ function ChannelsTab() {
 
       <ChannelWizard
         open={open}
+        initialType={wizType}
         editing={editing}
         onClose={() => setOpen(false)}
         onSaved={() => {
@@ -359,11 +368,13 @@ function ChannelsTab() {
 /** Wizard kết nối kênh: B1 hướng dẫn từng bước (link + copy webhook) → B2 điền token + kiểm tra kết nối */
 function ChannelWizard({
   open,
+  initialType,
   editing,
   onClose,
   onSaved,
 }: {
   open: boolean;
+  initialType: ChannelType;
   editing: ChannelAccount | null;
   onClose: () => void;
   onSaved: () => void;
@@ -388,7 +399,7 @@ function ChannelWizard({
 
   useEffect(() => {
     if (open) {
-      setType(editing?.type ?? 'ZALO_OA');
+      setType(editing?.type ?? initialType);
       setName(editing?.name ?? '');
       setExternalId(editing?.externalId ?? '');
       setCreds({});
@@ -399,7 +410,7 @@ function ChannelWizard({
       setQrWaiting(false);
       setOauthUrl(undefined);
     }
-  }, [open, editing]);
+  }, [open, editing, initialType]);
 
   // Zalo OA: hỏi server có URL cấp quyền OAuth không (chỉ khi đã đăng ký app Zalo)
   useEffect(() => {
@@ -472,7 +483,7 @@ function ChannelWizard({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={`Kết nối ${editing?.name ?? type} — Bước ${step}/2`}>
+    <Modal open={open} onClose={onClose} title={`Kết nối ${editing?.name ?? CHANNEL_LABELS[type]} — Bước ${step}/2`}>
       {step === 1 ? (
         <div className="space-y-3">
           <p className="text-sm leading-relaxed text-ink-soft">{guide?.intro}</p>
