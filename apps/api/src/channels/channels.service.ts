@@ -32,12 +32,15 @@ export class ChannelsService {
   }
 
   adapterMeta() {
+    const devMode = process.env.NODE_ENV !== 'production';
     return CHANNEL_TYPES.map((t) => {
       const a = this.adapters.get(t);
       return {
         type: t,
         requiresApproval: a?.requiresApproval ?? false,
         envBridge: t === 'ZALO_PERSONAL' ? !!process.env.ZALO_PERSONAL_BRIDGE_URL : undefined,
+        // true = môi trường dev/test (hiện nút giả lập); production tự ẩn
+        devMode,
       };
     });
   }

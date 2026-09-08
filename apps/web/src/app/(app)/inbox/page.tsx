@@ -55,6 +55,14 @@ export default function InboxPage() {
     api<User[]>('/users').then(setUsers).catch(() => {});
   }, []);
 
+  // Nút giả lập chỉ hiện ở môi trường dev (production tự ẩn)
+  const [devMode, setDevMode] = useState(false);
+  useEffect(() => {
+    api<{ devMode?: boolean }[]>('/channel-accounts/meta')
+      .then((m) => setDevMode(m[0]?.devMode ?? false))
+      .catch(() => {});
+  }, []);
+
   const openConversation = useCallback(async (id: string) => {
     setActiveId(id);
     setMobileView('chat');
@@ -147,7 +155,7 @@ export default function InboxPage() {
           {loading ? (
             <div className="flex justify-center py-10"><Spinner className="h-6 w-6" /></div>
           ) : conversations.length === 0 ? (
-            <EmptyState icon="💬" title="Chưa có hội thoại nào" hint="Bấm 🧪 để giả lập tin nhắn test" />
+            <EmptyState icon="💬" title="Chưa có hội thoại nào" hint={devMode ? 'Bấm 🧪 để giả lập tin nhắn test' : 'Tin nhắn từ khách sẽ xuất hiện ở đây'} />
           ) : (
             conversations.map((c) => (
               <button
@@ -184,9 +192,11 @@ export default function InboxPage() {
             ))
           )}
         </div>
-        <button onClick={() => setSimOpen(true)} className="border-t border-brand-100 py-2.5 text-xs font-bold text-ink-faint hover:bg-brand-50 hover:text-brand-600">
-          🧪 Giả lập tin nhắn đến (test)
-        </button>
+        {devMode && (
+          <button onClick={() => setSimOpen(true)} className="border-t border-brand-100 py-2.5 text-xs font-bold text-ink-faint hover:bg-brand-50 hover:text-brand-600">
+            🧪 Giả lập tin nhắn đến (test)
+          </button>
+        )}
       </div>
 
       {/* ============ CỘT 2: KHUNG CHAT ============ */}

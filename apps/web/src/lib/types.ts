@@ -133,6 +133,8 @@ export interface ChannelMeta {
   type: ChannelType;
   requiresApproval: boolean;
   envBridge?: boolean;
+  /** true = môi trường dev/test (được hiện nút giả lập); production = false */
+  devMode?: boolean;
 }
 
 export interface AnalyticsSummary {

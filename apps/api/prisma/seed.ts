@@ -31,6 +31,14 @@ async function main() {
     },
   });
 
+  // ---- Dữ liệu mẫu: CHỈ tạo ở môi trường dev (NODE_ENV !== production).
+  // Production giữ DB sạch — chỉ có tài khoản ở trên.
+  if (process.env.NODE_ENV === 'production') {
+    console.log('✅ Seed xong (production — chỉ tài khoản, không có dữ liệu mẫu)');
+    console.log('👤 Đăng nhập: admin@chumchum.vn (đổi mật khẩu ngay lần đầu)');
+    return;
+  }
+
   // ---- Kênh (credentials rỗng = chế độ MOCK; không đè token đã điền) ----
   const channels = [
     { type: 'ZALO_OA', externalId: 'zalo-oa-demo', name: 'Zalo OA ChumChum' },
@@ -141,7 +149,7 @@ async function main() {
   }
 
   console.log('✅ Seed xong — Đăng nhập: admin@chumchum.vn / Admin@123 (nhân viên: lan@chumchum.vn / Lan@123)');
-  console.log('📊 Đã tạo dữ liệu mẫu: 5 kênh (mock), 3 hội thoại, 2 đơn hàng');
+  console.log('📊 Đã tạo dữ liệu mẫu (dev): 5 kênh mock, 3 hội thoại, 2 đơn hàng');
   console.log('📚 Kết nối kênh thật: xem docs/HUONG-DAN-KET-NOI.md (thao tác trong Cài đặt → Kênh)');
 }
 

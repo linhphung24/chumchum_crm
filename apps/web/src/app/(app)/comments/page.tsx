@@ -10,6 +10,13 @@ import { Avatar, EmptyState, Modal, PageHeader, Spinner } from '@/components/ui'
 
 export default function CommentsPage() {
   const [comments, setComments] = useState<SocialComment[]>([]);
+  // Nút giả lập chỉ hiện ở môi trường dev (production tự ẩn)
+  const [devMode, setDevMode] = useState(false);
+  useEffect(() => {
+    api<{ devMode?: boolean }[]>('/channel-accounts/meta')
+      .then((m) => setDevMode(m[0]?.devMode ?? false))
+      .catch(() => {});
+  }, []);
   const [status, setStatus] = useState<'NEW' | 'HANDLED' | ''>('');
   const [loading, setLoading] = useState(true);
   const [convertTarget, setConvertTarget] = useState<SocialComment | null>(null);
@@ -75,18 +82,20 @@ export default function CommentsPage() {
           <div className="flex justify-center py-10"><Spinner className="h-6 w-6" /></div>
         ) : comments.length === 0 ? (
           <div className="card">
-            <EmptyState icon="🗣️" title="Chưa có bình luận" hint="Kết nối Facebook Page trong Cài đặt để nhận comment tự động, hoặc bấm nút giả lập bên dưới" />
-            <div className="pb-5 text-center">
-              <button
-                className="btn-secondary text-xs"
-                onClick={async () => {
-                  await api('/dev/simulate-comment', { method: 'POST', body: { author: 'Khách Facebook', message: 'Mình đặt 1 cái màu hồng size L với ạ' } });
-                  load();
-                }}
-              >
-                🧪 Giả lập comment
-              </button>
-            </div>
+            <EmptyState icon="🗣️" title="Chưa có bình luận" hint="Kết nối Facebook Page trong Cài đặt để nhận comment tự động" />
+            {devMode && (
+              <div className="pb-5 text-center">
+                <button
+                  className="btn-secondary text-xs"
+                  onClick={async () => {
+                    await api('/dev/simulate-comment', { method: 'POST', body: { author: 'Khách Facebook', message: 'Mình đặt 1 cái màu hồng size L với ạ' } });
+                    load();
+                  }}
+                >
+                  🧪 Giả lập comment
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-3">
