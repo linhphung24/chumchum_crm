@@ -51,7 +51,8 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3000:3000"
+      # Dùng 3100 thay vì 3000 để không đụng app khác trên VPS (vd: noti.chumchumbakery.com)
+      - "127.0.0.1:3100:3000"
     depends_on:
       - api
 
