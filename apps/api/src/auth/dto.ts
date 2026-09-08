@@ -15,6 +15,16 @@ export class RefreshDto {
   refreshToken: string;
 }
 
+export class ChangePasswordDto {
+  @IsString()
+  @IsNotEmpty()
+  oldPassword: string;
+
+  @IsString()
+  @MinLength(6)
+  newPassword: string;
+}
+
 export class CreateUserDto {
   @IsEmail()
   email: string;

@@ -4,6 +4,7 @@ import { RolesGuard } from '../common/roles.guard';
 import { Roles } from '../common/decorators';
 import { UsersService } from './users.service';
 import { CreateUserDto, UpdateUserDto } from '../auth/dto';
+import { CurrentUser, JwtUser } from '../common/decorators';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -24,13 +25,13 @@ export class UsersController {
 
   @Patch(':id')
   @Roles('ADMIN')
-  update(@Param('id') id: string, @Body() dto: UpdateUserDto) {
-    return this.users.update(id, dto);
+  update(@CurrentUser() actor: JwtUser, @Param('id') id: string, @Body() dto: UpdateUserDto) {
+    return this.users.update(actor.id, id, dto);
   }
 
   @Delete(':id')
   @Roles('ADMIN')
-  remove(@Param('id') id: string) {
-    return this.users.remove(id);
+  remove(@CurrentUser() actor: JwtUser, @Param('id') id: string) {
+    return this.users.remove(actor.id, id);
   }
 }

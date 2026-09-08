@@ -1,10 +1,10 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { randomToken, sha256 } from '../common/utils';
 import type { Role } from '../common/constants';
-import { LoginDto, RefreshDto } from './dto';
+import { LoginDto, RefreshDto, ChangePasswordDto } from './dto';
 
 export interface AuthTokens {
   accessToken: string;
@@ -88,6 +88,26 @@ export class AuthService {
       where: { tokenHash: sha256(dto.refreshToken), revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    return { ok: true };
+  }
+
+  /** Đổi mật khẩu cá nhân — thu hồi toàn bộ refresh token để ép các thiết bị khác đăng nhập lại */
+  async changePassword(userId: string, dto: ChangePasswordDto) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException('Không tìm thấy người dùng');
+    const ok = await bcrypt.compare(dto.oldPassword, user.passwordHash);
+    if (!ok) throw new BadRequestException('Mật khẩu hiện tại không đúng');
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { passwordHash: await bcrypt.hash(dto.newPassword, 10) },
+      }),
+      this.prisma.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
     return { ok: true };
   }
 }

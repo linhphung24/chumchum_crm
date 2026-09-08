@@ -14,13 +14,17 @@ const TABS = [
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<(typeof TABS)[number]['key']>('channels');
-  const me = getStoredUser();
+  const [me, setMe] = useState(getStoredUser());
+  const [pwOpen, setPwOpen] = useState(false);
 
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl p-4 md:p-6">
         <PageHeader title="Cài đặt" subtitle={`Xin chào ${me?.name ?? ''} · ${me ? ROLE_LABELS[me.role as Role] : ''}`} actions={
-          <button className="btn-secondary" onClick={logout}>Đăng xuất</button>
+          <div className="flex gap-2">
+            <button className="btn-secondary" onClick={() => setPwOpen(true)}>🔑 Đổi mật khẩu</button>
+            <button className="btn-secondary" onClick={logout}>Đăng xuất</button>
+          </div>
         } />
 
         <div className="mb-4 flex gap-1.5">
@@ -36,10 +40,73 @@ export default function SettingsPage() {
         </div>
 
         {tab === 'channels' && <ChannelsTab />}
-        {tab === 'users' && <UsersTab canEdit={me?.role === 'ADMIN'} />}
+        {tab === 'users' && <UsersTab canEdit={me?.role === 'ADMIN'} meId={me?.id} />}
         {tab === 'trello' && <TrelloTab />}
+
+        <ChangePasswordModal open={pwOpen} onClose={() => setPwOpen(false)} onDone={() => { setMe(getStoredUser()); }} />
       </div>
     </div>
+  );
+}
+
+/** Đổi mật khẩu cá nhân (mọi vai trò). Sau khi đổi, mọi phiên đăng nhập bị thu hồi → đăng nhập lại. */
+function ChangePasswordModal({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
+  const [form, setForm] = useState({ oldPassword: '', newPassword: '', confirm: '' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (open) {
+      setForm({ oldPassword: '', newPassword: '', confirm: '' });
+      setError('');
+    }
+  }, [open]);
+
+  return (
+    <Modal open={open} onClose={onClose} title="🔑 Đổi mật khẩu">
+      <div className="space-y-3">
+        <div>
+          <label className="label">Mật khẩu hiện tại</label>
+          <input className="input" type="password" value={form.oldPassword} onChange={(e) => setForm({ ...form, oldPassword: e.target.value })} />
+        </div>
+        <div>
+          <label className="label">Mật khẩu mới (tối thiểu 6 ký tự)</label>
+          <input className="input" type="password" value={form.newPassword} onChange={(e) => setForm({ ...form, newPassword: e.target.value })} />
+        </div>
+        <div>
+          <label className="label">Nhập lại mật khẩu mới</label>
+          <input className="input" type="password" value={form.confirm} onChange={(e) => setForm({ ...form, confirm: e.target.value })} />
+        </div>
+        {error && <p className="text-xs font-medium text-red-600">{error}</p>}
+        <p className="text-[11px] leading-relaxed text-ink-faint">
+          Sau khi đổi, các thiết bị khác sẽ bị đăng xuất và bạn cần đăng nhập lại.
+        </p>
+        <button
+          className="btn-primary w-full py-2.5"
+          disabled={busy || form.newPassword.length < 6 || form.newPassword !== form.confirm}
+          onClick={async () => {
+            setBusy(true);
+            setError('');
+            try {
+              await api('/auth/change-password', {
+                method: 'POST',
+                body: { oldPassword: form.oldPassword, newPassword: form.newPassword },
+              });
+              onClose();
+              onDone();
+              // Refresh token đã bị thu hồi → đăng nhập lại ngay cho sạch
+              await logout();
+            } catch (err) {
+              setError((err as Error).message);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? <Spinner className="border-white/40 border-t-white" /> : 'Đổi mật khẩu'}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -262,10 +329,11 @@ function ConnectModal({
 
 // ================= NGƯỜI DÙNG =================
 
-function UsersTab({ canEdit }: { canEdit: boolean }) {
+function UsersTab({ canEdit, meId }: { canEdit: boolean; meId?: string }) {
   const [users, setUsers] = useState<User[]>([]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<User | null>(null);
+  const [error, setError] = useState('');
 
   async function load() {
     setUsers(await api<User[]>('/users'));
@@ -274,8 +342,19 @@ function UsersTab({ canEdit }: { canEdit: boolean }) {
     load();
   }, []);
 
+  async function act(fn: () => Promise<unknown>) {
+    setError('');
+    try {
+      await fn();
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
   return (
     <div className="card divide-y divide-brand-50 overflow-hidden">
+      {error && <p className="bg-red-50 px-4 py-2 text-xs font-medium text-red-600">{error}</p>}
       {users.map((u) => (
         <div key={u.id} className="flex items-center gap-3 px-4 py-3">
           <div className="min-w-0 flex-1">
@@ -283,13 +362,36 @@ function UsersTab({ canEdit }: { canEdit: boolean }) {
               <span className="text-sm font-extrabold">{u.name}</span>
               <Badge className="bg-brand-100 text-brand-700">{ROLE_LABELS[u.role]}</Badge>
               {!u.isActive && <Badge className="bg-neutral-200 text-neutral-600">Đã khoá</Badge>}
+              {u.id === meId && <Badge className="bg-brand-50 text-ink-soft">Bạn</Badge>}
             </div>
             <p className="text-xs text-ink-soft">{u.email}</p>
           </div>
           {canEdit && (
-            <button className="btn-secondary px-3 py-1.5 text-xs" onClick={() => { setEditing(u); setOpen(true); }}>
-              ✏️ Sửa
-            </button>
+            <div className="flex gap-1.5">
+              <button className="btn-secondary px-3 py-1.5 text-xs" onClick={() => { setEditing(u); setOpen(true); }}>
+                ✏️ Sửa
+              </button>
+              {u.id !== meId && (
+                <>
+                  <button
+                    className="btn-secondary px-3 py-1.5 text-xs"
+                    onClick={() => act(() => api(`/users/${u.id}`, { method: 'PATCH', body: { isActive: !u.isActive } }))}
+                  >
+                    {u.isActive ? '⏸ Khoá' : '▶️ Mở khoá'}
+                  </button>
+                  <button
+                    className="rounded-xl border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-red-100"
+                    onClick={() => {
+                      if (window.confirm(`Xoá vĩnh viễn tài khoản "${u.name}" (${u.email})? Lịch sử đơn liên quan sẽ được giữ.`)) {
+                        act(() => api(`/users/${u.id}`, { method: 'DELETE' }));
+                      }
+                    }}
+                  >
+                    🗑
+                  </button>
+                </>
+              )}
+            </div>
           )}
         </div>
       ))}
