@@ -197,13 +197,18 @@ const CHANNEL_GUIDES: Record<
     intro: 'Zalo Official Account — nhận & trả lời tin nhắn khách hàng qua API chính thức của Zalo.',
     steps: [
       { text: 'Đăng nhập developers.zalo.me bằng tài khoản Zalo đang quản lý OA', link: { label: 'Mở developers.zalo.me →', href: 'https://developers.zalo.me' } },
-      { text: 'Nếu Zalo yêu cầu "xác thực domain": vào tab 🌐 Domain trong Cài đặt, thêm domain web của bạn và làm theo hướng dẫn (DNS/meta/file)' },
-      { text: 'Chọn OA của bạn → mục "Access token" → Copy (token hiệu lực 45 ngày, Zalo sẽ nhắc làm mới)' },
-      { text: 'Dán token vào ô bên dưới → bấm "Kiểm tra kết nối" (tên OA tự điền)' },
-      { text: 'Trên developers.zalo.me → Webhook → dán URL webhook bên dưới, lưu lại' },
+      { text: 'Tạo Ứng dụng (App) trong mục Quản lý ứng dụng → copy App ID và Secret Key', link: { label: 'Hướng dẫn tạo app →', href: 'https://developers.zalo.me/docs/official-account/bat-dau/kham-pha' } },
+      { text: 'Nhờ quản trị server điền ZALO_OA_APP_ID + ZALO_OA_APP_SECRET vào file .env rồi restart API (làm 1 lần)' },
+      { text: 'Quay lại đây bấm "🔗 Đăng nhập Zalo để cấp quyền" (bước 2) → chọn OA → Cho phép → xong! Token tự làm mới mỗi ngày, không cần dán lại bao giờ' },
+      { text: 'Chưa có app? Dán Access Token thủ công ở bước 2 vẫn dùng được (token 25 giờ — nên tạo app để tự động)' },
+      { text: 'Cuối cùng: developers.zalo.me → Webhook → dán URL webhook bên dưới' },
     ],
     webhook: '/webhooks/zalo',
-    fields: [{ key: 'accessToken', label: 'OA Access Token', secret: true }],
+    fields: [
+      { key: 'accessToken', label: 'OA Access Token (dán tay nếu chưa có app)', secret: true },
+      { key: 'refreshToken', label: 'Refresh Token (tự làm mới access token)', secret: true },
+      { key: 'appId', label: 'App ID (của OA trên developers.zalo.me)' },
+    ],
   },
   FACEBOOK: {
     intro: 'Messenger + Comment Facebook qua Graph API chính thức của Meta.',
@@ -536,14 +541,19 @@ function ChannelWizard({
             <div className="rounded-xl bg-brand-50 p-3">
               {oauthUrl ? (
                 <>
-                  <p className="mb-2 text-xs font-bold text-ink-soft">Cấp quyền nhanh qua Zalo (khỏi dán token):</p>
+                  <p className="mb-2 text-xs font-bold text-ink-soft">Cấp quyền nhanh (không cần dán token):</p>
                   <a href={oauthUrl} className="btn-primary flex items-center justify-center py-2 text-sm">
                     🔗 Đăng nhập Zalo để cấp quyền
                   </a>
+                  <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">
+                    Zalo sẽ hỏi bạn chọn OA → bấm Cho phép → hệ thống tự lưu token và <b>tự làm mới mỗi ngày</b>.
+                  </p>
                 </>
               ) : (
                 <p className="text-xs leading-relaxed text-ink-soft">
-                  Mẹo: chế độ &quot;cấp quyền 1-cú-click&quot; cần đăng ký app với Zalo (env ZALO_OA_APP_ID) — hiện hãy dán token theo hướng dẫn.
+                  Để bật nút <b>&quot;Đăng nhập Zalo cấp quyền&quot;</b> (1-cú-click, token tự động): tạo app trên developers.zalo.me →
+                  điền <code>ZALO_OA_APP_ID</code> + <code>ZALO_OA_APP_SECRET</code> vào file .env trên server → restart API.
+                  Chưa có app thì dán token thủ công bên dưới vẫn dùng được.
                 </p>
               )}
             </div>
@@ -559,7 +569,7 @@ function ChannelWizard({
           </div>
 
           <div className="rounded-xl bg-brand-50 p-3">
-            <p className="mb-2 text-xs font-bold text-ink-soft">Thông tin đăng nhập</p>
+            <p className="mb-2 text-xs font-bold text-ink-soft">Thông tin đăng nhập {editing && <span className="font-normal text-ink-faint">(để trống = giữ giá trị đã lưu)</span>}</p>
             <div className="space-y-2">
               {guide?.fields.map((f) => (
                 <div key={f.key}>
@@ -577,6 +587,27 @@ function ChannelWizard({
             {type !== 'ZALO_PERSONAL' && (
               <button className="btn-secondary mt-2.5 w-full py-2 text-sm" disabled={busy} onClick={runTest}>
                 {busy ? <Spinner className="border-brand-300 border-t-brand-600" /> : '🔌 Kiểm tra kết nối'}
+              </button>
+            )}
+            {type === 'ZALO_OA' && editing && (
+              <button
+                className="btn-secondary mt-2 w-full py-2 text-sm"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  setError('');
+                  setTestResult(null);
+                  try {
+                    const r = await api<{ ok: boolean; message?: string }>(`/channel-accounts/${editing.id}/refresh`, { method: 'POST' });
+                    setTestResult({ ok: r.ok, message: r.ok ? `🔄 ${r.message}` : r.message });
+                  } catch (err) {
+                    setError((err as Error).message);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                🔄 Làm mới access token ngay
               </button>
             )}
           </div>

@@ -158,6 +158,40 @@ export class ZaloOaAdapter implements ChannelAdapter {
       return { ok: false, message: `Token không hợp lệ — ${(err as Error).message}` };
     }
   }
+
+  /**
+   * Làm mới access token bằng refresh token theo OAuth v4 của Zalo:
+   * POST https://oauth.zaloapp.com/v4/oa/access_token
+   * headers: Content-Type form-urlencoded + secret_key (ZALO_OA_APP_SECRET)
+   * body: app_id, grant_type=refresh_token, refresh_token
+   * Access token 25 giờ / refresh token 3 tháng (dùng 1 lần, mỗi lần làm mới trả cặp mới).
+   * Cron 2h sáng mỗi ngày gọi để giữ token luôn sống.
+   */
+  async refreshCredentials(account: { credentials?: string | null }) {
+    const cred = parseCredentials<{ accessToken?: string; refreshToken?: string; appId?: string; [k: string]: string | undefined }>(account.credentials);
+    if (!cred?.refreshToken || !cred?.appId) {
+      return { ok: false, message: 'Chưa có Refresh Token + App ID (tự có khi kết nối bằng "Đăng nhập Zalo cấp quyền")' };
+    }
+    const appSecret = process.env.ZALO_OA_APP_SECRET;
+    if (!appSecret) return { ok: false, message: 'Server chưa cấu hình ZALO_OA_APP_SECRET (.env)' };
+
+    const res = await fetch('https://oauth.zaloapp.com/v4/oa/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', secret_key: appSecret },
+      body: new URLSearchParams({
+        app_id: cred.appId,
+        grant_type: 'refresh_token',
+        refresh_token: cred.refreshToken,
+      }),
+    });
+    const json = (await res.json().catch(() => ({}))) as { access_token?: string; refresh_token?: string; error?: number; error_description?: string };
+    if (!json?.access_token) {
+      return { ok: false, message: `Zalo từ chối làm mới token: ${json?.error_description ?? json?.error ?? 'không rõ lỗi'}` };
+    }
+    const next: Record<string, string> = { ...cred, accessToken: json.access_token } as Record<string, string>;
+    if (json.refresh_token) next.refreshToken = json.refresh_token; // refresh token cũ hết hiệu lực — thay bằng cái mới
+    return { ok: true, message: 'Đã làm mới access token', credentials: next };
+  }
 }
 
 /**

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrdersService } from '../orders/orders.service';
+import { ChannelsService } from '../channels/channels.service';
 import { EventsGateway } from '../realtime/events.gateway';
 import { parseJson } from '../common/utils';
 import { getJson } from '../channels/channel-adapter';
@@ -10,7 +11,8 @@ import { createHmac } from 'crypto';
 /**
  * Background jobs:
  * 1) Đồng bộ đơn Shopee mỗi 30 phút (nếu đã cấu hình credentials)
- * 2) Dọn webhook log cũ mỗi ngày
+ * 2) Làm mới access token Zalo OA mỗi ngày (cần Refresh Token + App ID) — tránh hết hạn 45 ngày
+ * 3) Dọn webhook log cũ mỗi ngày
  */
 @Injectable()
 export class JobsService {
@@ -19,8 +21,23 @@ export class JobsService {
   constructor(
     private prisma: PrismaService,
     private orders: OrdersService,
+    private channels: ChannelsService,
     private events: EventsGateway,
   ) {}
+
+  @Cron(CronExpression.EVERY_DAY_AT_2AM)
+  async refreshZaloOaTokens() {
+    const accounts = await this.prisma.channelAccount.findMany({ where: { type: 'ZALO_OA', isActive: true } });
+    for (const account of accounts) {
+      if (!account.credentials?.includes('refreshToken')) continue; // chưa nhập refresh token → bỏ qua
+      try {
+        const r = await this.channels.refreshAccount(account.id);
+        this.logger.log(`Zalo OA (${account.name}): ${r.ok ? '✅ ' + r.message : '⚠️ ' + r.message}`);
+      } catch (err) {
+        this.logger.warn(`Zalo OA (${account.name}) làm mới token lỗi: ${(err as Error).message}`);
+      }
+    }
+  }
 
   @Cron(CronExpression.EVERY_30_MINUTES)
   async syncShopeeOrders() {

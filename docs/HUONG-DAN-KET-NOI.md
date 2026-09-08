@@ -30,16 +30,29 @@ Sau khi kết nối xong kênh nào, vào **Cài đặt → Kênh** trong app đ
 
 **Điều kiện**: đã có Zalo OA (đăng ký tại [oa.zalo.me](https://oa.zalo.me) hoặc zalo.cloud — OA phải đã duyệt và đang hoạt động).
 
-1. Vào **[developers.zalo.me](https://developers.zalo.me)** → đăng nhập bằng tài khoản quản trị OA.
-2. Chọn **Quản lý OA** → OA của bạn.
-3. Copy **OA ID** (dãy số) và tạo/copy **Access Token** (có hiệu lực 45 ngày — cần làm mới định kỳ, hệ thống Zalo sẽ gửi nhắc).
-4. **Webhook**: tại trang quản lý OA → mục Webhook → dán:
-   `https://your-domain/webhooks/zalo`
-   Chọn nhận sự kiện **Tin nhắn khách gửi** (user_send_text, user_send_image, user_send_attachment...).
-5. Vào app → **Cài đặt → Kênh → Zalo OA → Kết nối**:
-   - Tên: tuỳ (vd "Zalo OA ChumChum")
-   - ID kênh: OA ID ở bước 3
-   - Access Token: token ở bước 3 → **Lưu kết nối**.
+### Cách A — Cấp quyền 1-cú-click (khuyên dùng, token tự động)
+
+1. Vào **[developers.zalo.me](https://developers.zalo.me)** → **Quản lý ứng dụng** → tạo app → copy **App ID** + **Secret Key**.
+2. Điền vào file `.env` trên server rồi restart API (làm 1 lần):
+   ```
+   ZALO_OA_APP_ID=...
+   ZALO_OA_APP_SECRET=...
+   ```
+3. Vào app → **Cài đặt → Kênh → Zalo OA → Kết nối** → bấm **"🔗 Đăng nhập Zalo để cấp quyền"** → chọn OA → **Cho phép**.
+4. Hệ thống tự lưu access token + refresh token và **tự làm mới mỗi ngày lúc 2h sáng** (access token Zalo sống 25 giờ, refresh token 3 tháng dùng 1 lần — cron quay vòng liên tục nên không bao giờ hết).
+
+### Cách B — Dán token thủ công (test nhanh, không cần app)
+
+1. Trên developers.zalo.me → **API Explorer** (Công cụ → API Explorer) → chọn app, Token loại **OA Token**, chọn OA → tích quyền nhắn tin/quản lý → **Sinh Access Token** → copy `access_token` + `refresh_token`.
+2. Vào **Cài đặt → Kênh → Zalo OA → Kết nối** → dán Access Token (+ Refresh Token + App ID nếu muốn tự làm mới) → **Kiểm tra kết nối** → **Lưu**.
+   - Token tay sống 25 giờ — nếu có Refresh Token + App ID thì cron vẫn tự làm mới được.
+
+### Webhook (cả 2 cách đều phải làm)
+
+Tại trang quản lý OA trên developers.zalo.me → mục **Webhook** → dán:
+`https://api.chumchumbakery.com/webhooks/zalo`
+Chọn nhận sự kiện **Tin nhắn khách gửi** (user_send_text, user_send_image, user_send_attachment...).
+Nếu Zalo yêu cầu **xác thực domain**: vào tab **🌐 Domain** trong Cài đặt → thêm domain → dán mã Zalo cấp (hệ thống tự phục vụ file xác thực).
 
 ✅ Kiểm tra: dùng Zalo cá nhân **quan tâm OA** rồi nhắn tin → tin hiện trong Inbox.
 

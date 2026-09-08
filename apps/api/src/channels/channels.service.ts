@@ -1,9 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { createHash, createHmac } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { EventsGateway } from '../realtime/events.gateway';
 import { CHANNEL_TYPES, isChannelType } from '../common/constants';
+import { randomToken } from '../common/utils';
 import { FacebookAdapter, InstagramAdapter, ShopeeAdapter, TikTokAdapter, ZaloOaAdapter, ZaloPersonalAdapter } from './adapters';
-import { getJson, postJson } from './channel-adapter';
+import { getJson } from './channel-adapter';
 import type { ChannelAdapter } from './channel-adapter';
 import type { ChannelType } from '../common/constants';
 
@@ -83,7 +85,16 @@ export class ChannelsService {
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
     if (dto.credentials !== undefined) {
-      data.credentials = Object.keys(dto.credentials).length ? JSON.stringify(dto.credentials) : null;
+      // Gộp với credentials cũ: ô để trống = giữ giá trị đã lưu (vd refresh token không mất khi chỉ đổi access token)
+      const current = await this.prisma.channelAccount.findUnique({ where: { id }, select: { credentials: true } });
+      let existing: Record<string, string> = {};
+      try {
+        existing = current?.credentials ? JSON.parse(current.credentials) : {};
+      } catch {
+        existing = {};
+      }
+      const merged = { ...existing, ...dto.credentials };
+      data.credentials = Object.keys(merged).length ? JSON.stringify(merged) : null;
     }
     return this.prisma.channelAccount
       .update({ where: { id }, data })
@@ -106,48 +117,116 @@ export class ChannelsService {
     return adapter.testConnection(dto.credentials ?? {});
   }
 
-  // ================= Zalo OA — OAuth khung sẵn (bật khi có env ZALO_OA_APP_ID) =================
-  // ⚠️ Endpoint đổi token theo tài liệu Zalo OAuth; có thể cần hiệu chỉnh chi tiết sau khi
-  // đăng ký app thật với Zalo (thủ tục doanh nghiệp). Chưa có env → trả null, UI hiện hướng dẫn dán token.
-
-  zaloOaOAuthStart(): { url: string } | { url: null } {
-    const appId = process.env.ZALO_OA_APP_ID;
-    if (!appId) return { url: null };
-    const base = (process.env.PUBLIC_API_BASE_URL ?? 'http://localhost:4000').replace(/\/$/, '');
-    const redirectUri = `${base}/channels/zalo-oa/oauth/callback`;
-    return { url: `https://oauth.zalo.me/permissions?app_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}` };
+  /** Làm mới access token bằng refresh token (Zalo OA) — lưu credentials mới quay vòng */
+  async refreshAccount(id: string) {
+    const account = await this.prisma.channelAccount.findUnique({ where: { id } });
+    if (!account) throw new NotFoundException('Không tìm thấy tài khoản kênh');
+    const adapter = this.getAdapter(account.type);
+    if (!adapter.refreshCredentials) throw new BadRequestException('Kênh này không hỗ trợ làm mới token');
+    let result: { ok: boolean; message: string; credentials?: Record<string, string> };
+    try {
+      result = await adapter.refreshCredentials(account);
+    } catch (err) {
+      throw new BadRequestException(`Làm mới token lỗi: ${(err as Error).message}`);
+    }
+    if (result.ok && result.credentials) {
+      await this.prisma.channelAccount.update({
+        where: { id },
+        data: { credentials: JSON.stringify(result.credentials), isActive: true },
+      });
+    }
+    return result;
   }
 
-  /** Zalo redirect về callback kèm code → đổi lấy accessToken → lưu thẳng vào ChannelAccount ZALO_OA */
-  async zaloOaOAuthCallback(code: string) {
+  // ================= Zalo OA — OAuth v4 PKCE (1-cú-click, cần env ZALO_OA_APP_ID + ZALO_OA_APP_SECRET) =================
+  // Luồng theo tài liệu chính thức:
+  //   1) GET /channels/zalo-oa/oauth/start → trả URL https://oauth.zaloapp.com/v4/oa/permission?...
+  //      kèm code_challenge = Base64Url(SHA-256(code_verifier)); code_verifier giấu trong state (đã ký HMAC)
+  //   2) Admin OA chọn OA → Cho phép → Zalo redirect về /channels/zalo-oa/oauth/callback?code&oa_id&state
+  //   3) Server đổi code lấy access_token + refresh_token (POST form-urlencoded, header secret_key)
+  //      rồi lưu thẳng vào ChannelAccount ZALO_OA
+
+  private zaloOAuthState(verifier: string): string {
+    const payload = Buffer.from(JSON.stringify({ v: verifier, t: Date.now() })).toString('base64url');
+    const sig = createHmac('sha256', process.env.JWT_SECRET ?? 'dev-secret').update(payload).digest('base64url');
+    return `${payload}.${sig}`;
+  }
+
+  private verifyZaloOAuthState(state: string): string | null {
+    const [payload, sig] = (state ?? '').split('.');
+    if (!payload || !sig) return null;
+    const expect = createHmac('sha256', process.env.JWT_SECRET ?? 'dev-secret').update(payload).digest('base64url');
+    if (expect !== sig) return null;
+    try {
+      const data = JSON.parse(Buffer.from(payload, 'base64url').toString()) as { v: string; t: number };
+      if (Date.now() - data.t > 15 * 60_000) return null; // quá 15 phút
+      return data.v;
+    } catch {
+      return null;
+    }
+  }
+
+  zaloOaOAuthStart(): { url: string | null } {
+    const appId = process.env.ZALO_OA_APP_ID;
+    const secret = process.env.ZALO_OA_APP_SECRET;
+    if (!appId || !secret) return { url: null };
+    // code_verifier 43-128 ký tự hex; code_challenge = Base64Url(SHA-256(verifier)) bỏ padding
+    const verifier = randomToken(32);
+    const challenge = createHash('sha256').update(verifier).digest('base64url');
+    const base = (process.env.PUBLIC_API_BASE_URL ?? 'http://localhost:4000').replace(/\/$/, '');
+    const redirectUri = `${base}/channels/zalo-oa/oauth/callback`;
+    const url =
+      `https://oauth.zaloapp.com/v4/oa/permission?app_id=${encodeURIComponent(appId)}` +
+      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+      `&code_challenge=${encodeURIComponent(challenge)}` +
+      `&state=${encodeURIComponent(this.zaloOAuthState(verifier))}`;
+    return { url };
+  }
+
+  /** Zalo redirect trình duyệt về callback → đổi code lấy cặp token → lưu vào ChannelAccount */
+  async zaloOaOAuthCallback(code: string, oaId: string | undefined, state: string) {
     const appId = process.env.ZALO_OA_APP_ID;
     const appSecret = process.env.ZALO_OA_APP_SECRET;
-    if (!appId || !appSecret) throw new BadRequestException('Chưa cấu hình ZALO_OA_APP_ID / ZALO_OA_APP_SECRET');
+    if (!appId || !appSecret) throw new BadRequestException('Chưa cấu hình ZALO_OA_APP_ID / ZALO_OA_APP_SECRET trên server (.env)');
+    const verifier = this.verifyZaloOAuthState(state);
+    if (!verifier) throw new BadRequestException('State không hợp lệ hoặc đã hết hạn — bấm "Đăng nhập Zalo" lại từ đầu');
 
-    const tokenRes = await postJson('https://oauth.zalo.me/v4/oa/access_token', {
-      app_id: Number(appId),
-      app_secret: appSecret,
-      code,
-    }).catch((err) => {
-      throw new BadRequestException(`Đổi token Zalo thất bại: ${(err as Error).message}`);
+    // Đổi authorization_code (10 phút, dùng 1 lần) lấy access_token + refresh_token
+    const tokenRes = await fetch('https://oauth.zaloapp.com/v4/oa/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', secret_key: appSecret },
+      body: new URLSearchParams({
+        code,
+        app_id: appId,
+        grant_type: 'authorization_code',
+        code_verifier: verifier,
+      }),
     });
-    const accessToken = (tokenRes?.access_token as string) ?? ((tokenRes?.data as Record<string, unknown>)?.access_token as string);
-    if (!accessToken) throw new BadRequestException(`Zalo không trả access_token: ${JSON.stringify(tokenRes).slice(0, 200)}`);
+    const token = (await tokenRes.json().catch(() => ({}))) as { access_token?: string; refresh_token?: string; error?: number; error_description?: string };
+    if (!token.access_token) {
+      throw new BadRequestException(`Zalo không cấp token: ${token.error_description ?? token.error ?? 'không rõ lỗi'}`);
+    }
 
-    // Lấy thông tin OA để đặt tên + externalId
+    // Lấy tên OA để hiển thị (oa_id ưu tiên từ callback)
     let name = 'Zalo OA';
-    let externalId = 'oauth';
-    const oa = await getJson(`https://openapi.zalo.me/v2.0/oa/getoa?access_token=${accessToken}`).catch(() => null);
+    let externalId = oaId ?? '';
+    const oa = await getJson(`https://openapi.zalo.me/v2.0/oa/getoa?access_token=${token.access_token}`).catch(() => null);
     const data = oa?.data as Record<string, unknown> | undefined;
     if (data) {
       name = (data.name as string) ?? name;
-      externalId = String(data.oa_id ?? externalId);
+      externalId = String(data.oa_id ?? externalId ?? '');
     }
+    if (!externalId) externalId = `oauth-${Date.now()}`;
 
+    const credentials = JSON.stringify({
+      accessToken: token.access_token,
+      refreshToken: token.refresh_token ?? '',
+      appId,
+    });
     await this.prisma.channelAccount.upsert({
       where: { type_externalId: { type: 'ZALO_OA', externalId } },
-      update: { credentials: JSON.stringify({ accessToken }), isActive: true, name },
-      create: { type: 'ZALO_OA', externalId, name, credentials: JSON.stringify({ accessToken }) },
+      update: { credentials, isActive: true, name },
+      create: { type: 'ZALO_OA', externalId, name, credentials },
     });
     return { ok: true, name };
   }

@@ -50,6 +50,13 @@ export interface ChannelAdapter {
   ): Promise<{ displayName?: string; avatarUrl?: string } | null>;
   /** Kiểm tra credentials có hợp lệ không (gọi API nền tảng) — dùng cho wizard kết nối */
   testConnection?(credentials: Record<string, string>): Promise<TestConnectionResult>;
+  /** Làm mới access token bằng refresh token (nếu kênh hỗ trợ) — trả về credentials mới để lưu */
+  refreshCredentials?(account: { credentials?: string | null }): Promise<{
+    ok: boolean;
+    message: string;
+    /** credentials đầy đủ sau khi làm mới (đã quay vòng refresh token nếu nhà cung cấp trả về) */
+    credentials?: Record<string, string>;
+  }>;
 }
 
 export function mockSendResult(): SendResult {

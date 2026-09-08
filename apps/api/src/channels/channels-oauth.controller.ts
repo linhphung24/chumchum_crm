@@ -34,11 +34,17 @@ export class ChannelsOauthController {
 
   /** Zalo redirect trình duyệt về đây (không có JWT) → xử lý xong chuyển về trang Cài đặt */
   @Get('zalo-oa/oauth/callback')
-  async zaloOaCallback(@Query('code') code: string, @Query('error_message') error: string, @Res() res: Response) {
+  async zaloOaCallback(
+    @Query('code') code: string,
+    @Query('oa_id') oaId: string,
+    @Query('state') state: string,
+    @Query('error_message') error: string,
+    @Res() res: Response,
+  ) {
     const frontend = (process.env.FRONTEND_URL ?? 'http://localhost:3000').replace(/\/$/, '');
     try {
       if (!code) throw new Error(error || 'Thiếu mã code');
-      const r = await this.channels.zaloOaOAuthCallback(code);
+      const r = await this.channels.zaloOaOAuthCallback(code, oaId, state);
       return res.redirect(`${frontend}/settings?zalo-oa=ok&name=${encodeURIComponent(r.name)}`);
     } catch (err) {
       return res.redirect(`${frontend}/settings?zalo-oa=fail&msg=${encodeURIComponent((err as Error).message)}`);

@@ -68,6 +68,13 @@ export class ChannelsController {
     return this.channels.testConnection(dto);
   }
 
+  /** Làm mới access token bằng refresh token (Zalo OA) */
+  @Post(':id/refresh')
+  @Roles('ADMIN', 'MANAGER')
+  refresh(@Param('id') id: string) {
+    return this.channels.refreshAccount(id);
+  }
+
   @Post()
   @Roles('ADMIN', 'MANAGER')
   create(@Body() dto: SaveChannelAccountDto) {
