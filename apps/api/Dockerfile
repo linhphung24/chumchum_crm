@@ -20,6 +20,7 @@ RUN apk add --no-cache openssl
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
+COPY apps/api/tsconfig.json apps/api/
 COPY apps/api/prisma ./apps/api/prisma
 COPY --from=build /app/apps/api/dist ./apps/api/dist
 # prisma + ts-node nằm trong dependencies nên có sẵn cho migrate/seed
