@@ -406,7 +406,7 @@ export class ChannelsService {
       `https://www.facebook.com/v21.0/dialog/oauth?client_id=${encodeURIComponent(appId)}` +
       `&redirect_uri=${encodeURIComponent(redirectUri)}` +
       `&state=${encodeURIComponent(this.zaloOAuthState(`fb-${randomToken(8)}`))}` +
-      `&scope=${encodeURIComponent('pages_show_list,pages_messaging,pages_read_engagement,pages_manage_metadata,pages_manage_posts')}`;
+      `&scope=${encodeURIComponent('pages_show_list,pages_messaging,pages_read_engagement,pages_manage_metadata')}`;
     return { url };
   }
 
