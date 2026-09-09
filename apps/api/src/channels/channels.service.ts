@@ -152,14 +152,16 @@ export class ChannelsService {
     if (!account.credentials?.includes('accessToken')) throw new BadRequestException('Kênh chưa kết nối (thiếu access token)');
     const token = (JSON.parse(account.credentials) as { accessToken?: string }).accessToken as string;
 
-    const headers = { ZALO_OA_ACCESS_TOKEN: token } as Record<string, string>;
+    // Đã kiểm chứng thực tế: header `access_token` + tham số gói trong query data (JSON string)
+    const headers = { access_token: token } as Record<string, string>;
     const v3Get = async (path: string, payload: Record<string, unknown>) =>
       fetch(`https://openapi.zalo.me/v3.0/oa/${path}?data=${encodeURIComponent(JSON.stringify(payload))}`, { headers })
         .then((r) => r.json().catch(() => null))
         .catch(() => null) as Promise<Record<string, unknown> | null>;
 
     // 1) Danh sách user đã tương tác — chạy cả follower (true) và đã unfollow (false)
-    const users = new Map<string, { user_id?: string; display_name?: string; avatar?: string }>();
+    // (getlist chỉ trả user_id — tên/ảnh lấy bằng user/detail ở dưới)
+    const users = new Set<string>();
     let listError = '';
     for (const isFollower of [true, false]) {
       for (let offset = 0; offset < 150; offset += 50) {
@@ -169,13 +171,13 @@ export class ChannelsService {
           break;
         }
         const errCode = Number(json?.error ?? json?.error_code ?? 0);
-        const data = json?.data as { users?: { user_id?: string; display_name?: string; avatar?: string }[] } | undefined;
+        const data = json?.data as { users?: { user_id?: string }[] } | undefined;
         if (errCode !== 0 || !Array.isArray(data?.users)) {
           if (errCode !== 0 && !listError) listError = `Zalo ${errCode}: ${json?.message ?? json?.error_message ?? 'lỗi không rõ'}`;
           break;
         }
         for (const u of data?.users ?? []) {
-          if (u.user_id) users.set(String(u.user_id), u);
+          if (u.user_id) users.add(String(u.user_id));
         }
         if ((data?.users?.length ?? 0) < 50) break;
       }
@@ -185,7 +187,13 @@ export class ChannelsService {
     }
 
     let created = 0;
-    for (const [externalUserId, u] of users) {
+    for (const externalUserId of users) {
+      // Tên/ảnh qua user/detail (đã kiểm chứng: display_name, avatar, user_is_follower...)
+      const detail = await v3Get('user/detail', { user_id: externalUserId });
+      const d = (detail?.data ?? {}) as Record<string, unknown>;
+      const displayName = (d.display_name as string) ?? '';
+      const avatar = (d.avatar as string) ?? '';
+
       const identity = await this.prisma.channelIdentity.findUnique({
         where: { channelAccountId_externalUserId: { channelAccountId: account.id, externalUserId } },
         include: { customer: true },
@@ -193,25 +201,25 @@ export class ChannelsService {
       let customerId: string;
       if (!identity) {
         const customer = await this.prisma.customer.create({
-          data: { name: u.display_name || `Khách Zalo ${externalUserId.slice(-4)}`, avatarUrl: u.avatar ?? null },
+          data: { name: displayName || `Khách Zalo ${externalUserId.slice(-4)}`, avatarUrl: avatar || null },
         });
         await this.prisma.channelIdentity.create({
           data: {
             customerId: customer.id,
             channelAccountId: account.id,
             externalUserId,
-            displayName: u.display_name ?? null,
-            avatarUrl: u.avatar ?? null,
+            displayName: displayName || null,
+            avatarUrl: avatar || null,
           },
         });
         customerId = customer.id;
       } else {
         customerId = identity.customerId;
         const needName = !identity.customer.name || identity.customer.name.startsWith('Khách');
-        if (needName && (u.display_name || u.avatar)) {
+        if (needName && displayName) {
           await this.prisma.customer.update({
             where: { id: customerId },
-            data: { name: u.display_name || identity.customer.name, avatarUrl: u.avatar ?? identity.customer.avatarUrl },
+            data: { name: displayName, avatarUrl: avatar || identity.customer.avatarUrl },
           }).catch(() => undefined);
         }
       }
@@ -222,37 +230,40 @@ export class ChannelsService {
         })) ??
         (await this.prisma.conversation.create({ data: { customerId, channelAccountId: account.id } }));
 
-      // 2) 10 tin gần nhất (szv2) — dedupe theo message_id
+      // 2) Tin nhắn gần nhất (chat/szv2) — API này cần đăng ký riêng trong app Zalo;
+      // nếu app chưa có (404/-114) thì bỏ qua âm thầm, tin mới vẫn về qua webhook + cron
       const chatJson = await v3Get('chat/szv2', { user_id: externalUserId, offset: 0 });
-      const chatData = chatJson?.data as { messages?: Record<string, unknown>[] } | undefined;
-      for (const m of chatData?.messages ?? []) {
-        const messageId = String(m.message_id ?? m.msg_id ?? '');
-        const contentRaw = (m.content ?? m.text ?? '') as unknown;
-        const text = typeof contentRaw === 'string' ? contentRaw : ((contentRaw as { text?: string })?.text ?? '');
-        if (!messageId || !text) continue;
-        const direction = String(m.from_uid ?? '') === externalUserId ? 'IN' : 'OUT';
-        const dup = await this.prisma.message.findFirst({ where: { conversationId: conversation.id, externalId: messageId } });
-        if (dup) continue;
-        await this.prisma.message.create({
-          data: {
-            conversationId: conversation.id,
-            direction,
-            type: 'TEXT',
-            text,
-            externalId: messageId,
-            status: 'SENT',
-            createdAt: m.timestamp ? new Date(Number(m.timestamp) * (Number(m.timestamp) > 1e12 ? 1 : 1000)) : new Date(),
-          },
-        });
-        created++;
-      }
-
-      const last = await this.prisma.message.findFirst({ where: { conversationId: conversation.id }, orderBy: { createdAt: 'desc' } });
-      if (last) {
-        await this.prisma.conversation.update({
-          where: { id: conversation.id },
-          data: { lastMessageAt: last.createdAt, lastMessageText: last.text ?? '', lastDirection: last.direction, status: 'OPEN' },
-        }).catch(() => undefined);
+      const chatErr = Number(chatJson?.error ?? chatJson?.error_code ?? 0);
+      if (chatErr === 0) {
+        const chatData = chatJson?.data as { messages?: Record<string, unknown>[] } | undefined;
+        for (const m of chatData?.messages ?? []) {
+          const messageId = String(m.message_id ?? m.msg_id ?? '');
+          const contentRaw = (m.content ?? m.text ?? '') as unknown;
+          const text = typeof contentRaw === 'string' ? contentRaw : ((contentRaw as { text?: string })?.text ?? '');
+          if (!messageId || !text) continue;
+          const direction = String(m.from_uid ?? '') === externalUserId ? 'IN' : 'OUT';
+          const dup = await this.prisma.message.findFirst({ where: { conversationId: conversation.id, externalId: messageId } });
+          if (dup) continue;
+          await this.prisma.message.create({
+            data: {
+              conversationId: conversation.id,
+              direction,
+              type: 'TEXT',
+              text,
+              externalId: messageId,
+              status: 'SENT',
+              createdAt: m.timestamp ? new Date(Number(m.timestamp) * (Number(m.timestamp) > 1e12 ? 1 : 1000)) : new Date(),
+            },
+          });
+          created++;
+        }
+        const last = await this.prisma.message.findFirst({ where: { conversationId: conversation.id }, orderBy: { createdAt: 'desc' } });
+        if (last) {
+          await this.prisma.conversation.update({
+            where: { id: conversation.id },
+            data: { lastMessageAt: last.createdAt, lastMessageText: last.text ?? '', lastDirection: last.direction, status: 'OPEN' },
+          }).catch(() => undefined);
+        }
       }
     }
     return { ok: true, created, total: users.size };

@@ -621,7 +621,7 @@ function ChannelWizard({
                     setTestResult(null);
                     try {
                       const r = await api<{ ok: boolean; created: number; total: number }>(`/channel-accounts/${editing.id}/sync-chats`, { method: 'POST' });
-                      setTestResult({ ok: true, message: `⬇️ Đã đồng bộ ${r.created}/${r.total} hội thoại từ Zalo về inbox` });
+                      setTestResult({ ok: true, message: `⬇️ Đã đồng bộ ${r.total} người đã chat về inbox (nhập thêm ${r.created} tin cũ)` });
                     } catch (err) {
                       setError((err as Error).message);
                     } finally {

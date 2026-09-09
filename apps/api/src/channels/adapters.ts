@@ -144,9 +144,13 @@ export class ZaloOaAdapter implements ChannelAdapter {
   readonly type = 'ZALO_OA' as ChannelType;
   readonly label = CHANNEL_LABELS.ZALO_OA;
 
-  /** Chuẩn API v3 của Zalo: header ZALO_OA_ACCESS_TOKEN + params gói trong query "data" (JSON string) */
+  /**
+   * Chuẩn API v3 của Zalo (đã kiểm chứng thực tế 09/2026):
+   *  - Header: `access_token: <token>` (KHÔNG phải Bearer/ZALO_OA_ACCESS_TOKEN — những kiểu đó bị -216)
+   *  - Tham số gói trong query `data` (JSON string)
+   */
   private v3Headers(accessToken: string): Record<string, string> {
-    return { 'ZALO_OA_ACCESS_TOKEN': accessToken, 'Content-Type': 'application/json' };
+    return { access_token: accessToken, 'Content-Type': 'application/json' };
   }
   private async v3Get<T = Record<string, unknown>>(accessToken: string, path: string, payload: Record<string, unknown>): Promise<T | null> {
     const url = `https://openapi.zalo.me/v3.0/oa/${path}?data=${encodeURIComponent(JSON.stringify(payload))}`;
