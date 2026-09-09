@@ -716,6 +716,31 @@ function ChannelWizard({
               {busy ? <Spinner className="border-white/40 border-t-white" /> : '💾 Lưu kết nối'}
             </button>
           </div>
+          {editing && (
+            <button
+              className="w-full rounded-xl border border-red-200 bg-red-50 py-2 text-xs font-bold text-red-600 hover:bg-red-100"
+              disabled={busy}
+              onClick={async () => {
+                const ok1 = window.confirm(
+                  `Ngắt kết nối "${editing.name}"?\n\nSẽ XOÁ VĨNH VIỄN: toàn bộ hội thoại + tin nhắn của kênh này, và những khách hàng chỉ tồn tại nhờ kênh này (kèm ĐƠN HÀNG của họ).`,
+                );
+                if (!ok1) return;
+                if (!window.confirm('Chắc chắn? Hành động này không thể hoàn tác.')) return;
+                setBusy(true);
+                setError('');
+                try {
+                  await api(`/channel-accounts/${editing.id}?purge=true`, { method: 'DELETE' });
+                  onSaved();
+                } catch (err) {
+                  setError((err as Error).message);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              🗑 Ngắt kết nối & xoá dữ liệu kênh (hội thoại, tin nhắn, khách riêng của kênh)
+            </button>
+          )}
         </div>
       )}
     </Modal>

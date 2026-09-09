@@ -103,10 +103,31 @@ export class ChannelsService {
       .then((a) => ({ ...a, credentials: undefined, hasCredentials: !!a.credentials }));
   }
 
-  async removeAccount(id: string) {
+  async removeAccount(id: string, purgeCustomers = false) {
     await this.ensureAccount(id);
+    // Danh sách khách của kênh (để xoá sau khi xoá tài khoản)
+    const account = await this.prisma.channelAccount.findUnique({
+      where: { id },
+      include: { identities: { select: { customerId: true } } },
+    });
+    const customerIds = [...new Set((account?.identities ?? []).map((i) => i.customerId))];
+
+    // Xoá tài khoản — cascade xoá hội thoại + tin nhắn + danh tính của kênh này
     await this.prisma.channelAccount.delete({ where: { id } });
-    return { ok: true };
+
+    // purge=true: xoá nốt khách hàng chỉ tồn tại nhờ kênh này (khách còn danh tính ở kênh khác sẽ giữ lại).
+    // Lưu ý: đơn hàng của những khách bị xoá cũng bị xoá theo (cascade).
+    let purgedCustomers = 0;
+    if (purgeCustomers) {
+      for (const cid of customerIds) {
+        const remaining = await this.prisma.channelIdentity.count({ where: { customerId: cid } });
+        if (remaining === 0) {
+          await this.prisma.customer.delete({ where: { id: cid } }).catch(() => undefined);
+          purgedCustomers++;
+        }
+      }
+    }
+    return { ok: true, purgedCustomers };
   }
 
   /** Wizard: kiểm tra credentials bằng cách gọi API thật của nền tảng (không lưu gì) */

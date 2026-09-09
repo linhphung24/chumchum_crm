@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { IsBoolean, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../common/roles.guard';
@@ -101,9 +101,10 @@ export class ChannelsController {
     return this.channels.updateAccount(id, dto);
   }
 
+  /** Xoá kênh. ?purge=true → xoá luôn khách hàng chỉ tồn tại nhờ kênh này (kèm đơn của họ) */
   @Delete(':id')
   @Roles('ADMIN')
-  remove(@Param('id') id: string) {
-    return this.channels.removeAccount(id);
+  remove(@Param('id') id: string, @Query('purge') purge?: string) {
+    return this.channels.removeAccount(id, purge === 'true');
   }
 }
