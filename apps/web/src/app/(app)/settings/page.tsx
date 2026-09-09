@@ -633,6 +633,27 @@ function ChannelWizard({
                 </button>
               </div>
             )}
+            {type === 'ZALO_PERSONAL' && editing && (
+              <button
+                className="btn-secondary w-full py-2 text-sm"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  setError('');
+                  setTestResult(null);
+                  try {
+                    const r = await api<{ ok: boolean; created: number; total: number }>(`/channel-accounts/${editing.id}/sync-friends`, { method: 'POST' });
+                    setTestResult({ ok: true, message: `👥 Đã thêm ${r.created}/${r.total} bạn bè Zalo vào danh sách khách hàng` });
+                  } catch (err) {
+                    setError((err as Error).message);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                👥 Đồng bộ danh sách bạn bè Zalo
+              </button>
+            )}
           </div>
 
           {testResult && (

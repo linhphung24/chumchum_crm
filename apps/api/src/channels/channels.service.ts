@@ -266,6 +266,66 @@ export class ChannelsService {
     return { ok: true, created, total: users.length };
   }
 
+  /**
+   * Đồng bộ DANH SÁCH BẠN BÈ từ bridge Zalo cá nhân về làm khách hàng
+   * (không cần có tin nhắn cũ — khi bạn bè nhắn tin sau này sẽ tự vào đúng khách).
+   */
+  async syncZaloPersonalFriends(id: string) {
+    const account = await this.prisma.channelAccount.findUnique({ where: { id } });
+    if (!account || account.type !== 'ZALO_PERSONAL') throw new BadRequestException('Chỉ hỗ trợ cho kênh Zalo cá nhân');
+    const cred = account.credentials
+      ? (JSON.parse(account.credentials) as { bridgeUrl?: string; apiKey?: string })
+      : {};
+    const bridgeUrl = cred.bridgeUrl ?? process.env.ZALO_PERSONAL_BRIDGE_URL;
+    const apiKey = cred.apiKey ?? process.env.ZALO_PERSONAL_BRIDGE_API_KEY;
+    if (!bridgeUrl) throw new BadRequestException('Chưa cấu hình Bridge URL cho kênh Zalo cá nhân');
+
+    const res = await fetch(`${bridgeUrl.replace(/\/$/, '')}/friends`, {
+      headers: { 'x-api-key': apiKey ?? '' },
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      friends?: Record<string, unknown>[];
+      error?: string;
+    };
+    if (!res.ok) throw new BadRequestException(`Bridge lỗi: ${json?.error ?? res.status}`);
+    const friends = Array.isArray(json.friends) ? json.friends : [];
+
+    const pick = (f: Record<string, unknown>, keys: string[]): string => {
+      for (const k of keys) {
+        const v = f[k];
+        if (typeof v === 'string' && v) return v;
+        if (typeof v === 'number' && v) return String(v);
+      }
+      return '';
+    };
+
+    let created = 0;
+    for (const f of friends) {
+      const externalUserId = pick(f, ['userId', 'user_id', 'uid', 'id']);
+      if (!externalUserId) continue;
+      const displayName = pick(f, ['displayName', 'display_name', 'name']);
+      const avatar = pick(f, ['avatar', 'avatarUrl', 'avatar_url']);
+      const existed = await this.prisma.channelIdentity.findUnique({
+        where: { channelAccountId_externalUserId: { channelAccountId: account.id, externalUserId } },
+      });
+      if (existed) continue;
+      const customer = await this.prisma.customer.create({
+        data: { name: displayName || `Bạn bè Zalo ${externalUserId.slice(-4)}`, avatarUrl: avatar || null },
+      });
+      await this.prisma.channelIdentity.create({
+        data: {
+          customerId: customer.id,
+          channelAccountId: account.id,
+          externalUserId,
+          displayName: displayName || null,
+          avatarUrl: avatar || null,
+        },
+      });
+      created++;
+    }
+    return { ok: true, created, total: friends.length };
+  }
+
   // ================= Zalo OA — OAuth v4 PKCE (1-cú-click, cần env ZALO_OA_APP_ID + ZALO_OA_APP_SECRET) =================
   // Luồng theo tài liệu chính thức:
   //   1) GET /channels/zalo-oa/oauth/start → trả URL https://oauth.zaloapp.com/v4/oa/permission?...

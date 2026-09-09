@@ -144,6 +144,31 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"connected": zl.IsLoggedIn() && listening})
 	}))
 
+	// Đồng bộ danh sách bạn bè Zalo cá nhân (đưa về CRM làm khách hàng)
+	mux.HandleFunc("GET /friends", guard(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		zl := z
+		mu.Unlock()
+		if !zl.IsLoggedIn() {
+			http.Error(w, `{"error":"bridge chưa đăng nhập — quét mã QR từ CRM trước"}`, http.StatusUnauthorized)
+			return
+		}
+		res, err := zl.FetchAllFriends()
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
+			return
+		}
+		friends := []map[string]any{}
+		if list, ok := res.([]*zago.User); ok {
+			for _, u := range list {
+				if u != nil {
+					friends = append(friends, u.ToMap())
+				}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"friends": friends, "total": len(friends)})
+	}))
+
 	// Sinh mã QR mới + nền chờ quét/xác nhận → tự đăng nhập khi người dùng quét
 	mux.HandleFunc("GET /qr", guard(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()

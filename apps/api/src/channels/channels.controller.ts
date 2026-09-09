@@ -82,6 +82,13 @@ export class ChannelsController {
     return this.channels.syncZaloChats(id);
   }
 
+  /** Đồng bộ danh sách bạn bè từ Zalo cá nhân (bridge) về làm khách hàng */
+  @Post(':id/sync-friends')
+  @Roles('ADMIN', 'MANAGER')
+  syncFriends(@Param('id') id: string) {
+    return this.channels.syncZaloPersonalFriends(id);
+  }
+
   @Post()
   @Roles('ADMIN', 'MANAGER')
   create(@Body() dto: SaveChannelAccountDto) {
