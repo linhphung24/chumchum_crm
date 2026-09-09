@@ -144,16 +144,34 @@ export class ZaloOaAdapter implements ChannelAdapter {
   readonly type = 'ZALO_OA' as ChannelType;
   readonly label = CHANNEL_LABELS.ZALO_OA;
 
+  /** Chuẩn API v3 của Zalo: header ZALO_OA_ACCESS_TOKEN + params gói trong query "data" (JSON string) */
+  private v3Headers(accessToken: string): Record<string, string> {
+    return { 'ZALO_OA_ACCESS_TOKEN': accessToken, 'Content-Type': 'application/json' };
+  }
+  private async v3Get<T = Record<string, unknown>>(accessToken: string, path: string, payload: Record<string, unknown>): Promise<T | null> {
+    const url = `https://openapi.zalo.me/v3.0/oa/${path}?data=${encodeURIComponent(JSON.stringify(payload))}`;
+    return fetch(url, { headers: this.v3Headers(accessToken) })
+      .then((r) => r.json().catch(() => null))
+      .catch(() => null) as Promise<T | null>;
+  }
+  private v3Error(json: Record<string, unknown> | null): string | null {
+    const errCode = Number(json?.error ?? json?.error_code ?? 0);
+    if (errCode === 0 && json) return null;
+    return `Zalo ${errCode}: ${json?.message ?? json?.error_message ?? 'lỗi không rõ'}`;
+  }
+
+  /** Gửi tin text — POST /v3.0/oa/message/cs */
   async sendText(account: { credentials?: string | null }, to: string, text: string): Promise<SendResult> {
     const cred = parseCredentials<{ accessToken?: string }>(account.credentials);
     if (!cred?.accessToken) return mockSendResult();
-    const json = await postJson(`https://openapi.zalo.me/v2.0/oa/message?access_token=${cred.accessToken}`, {
-      recipient: { user_id: to },
-      message: { text },
+    const res = await fetch('https://openapi.zalo.me/v3.0/oa/message/cs', {
+      method: 'POST',
+      headers: this.v3Headers(cred.accessToken),
+      body: JSON.stringify({ recipient: { user_id: to }, message: { text } }),
     });
-    // Zalo có 2 format lỗi: {error, message} (mới) và {error_code, error_message} (cũ)
-    const errCode = Number(json?.error ?? json?.error_code ?? 0);
-    if (errCode !== 0) throw new Error(`Zalo ${errCode}: ${json?.message ?? json?.error_message ?? 'lỗi không rõ'}`);
+    const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    const err = this.v3Error(json);
+    if (err) throw new Error(err);
     const data = json?.data as Record<string, unknown> | undefined;
     return { externalId: (data?.message_id as string) ?? undefined };
   }
@@ -161,35 +179,35 @@ export class ZaloOaAdapter implements ChannelAdapter {
   async fetchUserProfile(account: { credentials?: string | null; externalId: string }, externalUserId: string) {
     const cred = parseCredentials<{ accessToken?: string }>(account.credentials);
     if (!cred?.accessToken) return null;
-    const json = await postJson(`https://openapi.zalo.me/v2.0/oa/user?access_token=${cred.accessToken}`, {
-      user_id: externalUserId,
-    });
+    // v3: GET /v3.0/oa/user/detail?data={"user_id":"..."}
+    const json = await this.v3Get(cred.accessToken, 'user/detail', { user_id: externalUserId });
     const data = json?.data as Record<string, unknown> | undefined;
     return {
-      displayName: (data?.display_name as string) ?? undefined,
+      displayName: ((data?.display_name ?? data?.name) as string) ?? undefined,
       avatarUrl: (data?.avatar as string) ?? undefined,
     };
   }
 
-  /** Kiểm tra OA Access Token: GET /v2.0/oa/getoa trả tên + oa_id → tự điền */
+  /** Kiểm tra token: ưu tiên getoa (lấy tên), fallback v3 getlist (chỉ xác nhận token sống) */
   async testConnection(credentials: Record<string, string>): Promise<TestConnectionResult> {
     if (!credentials.accessToken) return { ok: false, message: 'Chưa nhập OA Access Token' };
     try {
-      const json = await getJson(`https://openapi.zalo.me/v2.0/oa/getoa?access_token=${credentials.accessToken}`);
-      const data = json?.data as Record<string, unknown> | undefined;
-      if (Number(json?.error_code ?? 0) !== 0 || !data) {
+      // Thử v3 user/getlist trước (token mới chỉ chạy v3) — nếu có user nào thì lấy tên từ user/detail luôn
+      const list = await this.v3Get(credentials.accessToken, 'user/getlist', { offset: 0, count: 1, is_follower: true });
+      const err = this.v3Error(list);
+      if (err) return { ok: false, message: `${err} (phản hồi: ${JSON.stringify(list).slice(0, 200)})` };
+      const users = ((list?.data as { users?: { user_id?: string }[] })?.users ?? []);
+      if (users[0]?.user_id) {
+        const detail = await this.v3Get(credentials.accessToken, 'user/detail', { user_id: users[0].user_id });
+        const d = detail?.data as Record<string, unknown> | undefined;
         return {
-          ok: false,
-          message: `Zalo từ chối token — ${json?.error_message ?? json?.error_name ?? ''} (phản hồi: ${JSON.stringify(json).slice(0, 250)})`,
+          ok: true,
+          name: ((d?.display_name ?? d?.name) as string) ?? undefined,
+          avatarUrl: (d?.avatar as string) ?? undefined,
+          message: `Token hợp lệ (đã tương tác ${users.length >= 1 ? '≥1' : '0'} người)`,
         };
       }
-      return {
-        ok: true,
-        name: (data.name as string) ?? undefined,
-        avatarUrl: (data.avatar as string) ?? undefined,
-        externalId: String(data.oa_id ?? ''),
-        message: `Kết nối thành công: ${data.name ?? 'OA'}`,
-      };
+      return { ok: true, message: 'Token hợp lệ — OA chưa có ai tương tác' };
     } catch (err) {
       return { ok: false, message: `Token không hợp lệ — ${(err as Error).message}` };
     }
@@ -239,7 +257,7 @@ export class ZaloOaAdapter implements ChannelAdapter {
     return { ok: true, message: 'Đã làm mới access token', credentials: next };
   }
 
-  /** Gửi ảnh/video/file: upload lên Zalo nhận token → gửi message kèm attachment token */
+  /** Gửi ảnh/video/file — v3 message/cs dạng template media với URL công khai (khỏi upload nhận token như v2) */
   async sendAttachment(
     account: { credentials?: string | null; externalId: string },
     to: string,
@@ -247,29 +265,26 @@ export class ZaloOaAdapter implements ChannelAdapter {
   ): Promise<SendResult> {
     const cred = parseCredentials<{ accessToken?: string }>(account.credentials);
     if (!cred?.accessToken) return mockSendResult();
-    const kind = att.type === 'IMAGE' ? 'image' : att.type === 'VIDEO' ? 'video' : 'file';
-
-    // 1) Upload file (multipart form-data, field "file")
-    const bytes = Buffer.from(await (await fetch(att.url)).arrayBuffer());
-    const form = new FormData();
-    form.append('file', new Blob([new Uint8Array(bytes)]), att.filename);
-    const upRes = await fetch(`https://openapi.zalo.me/v2.0/oa/upload/${kind}?access_token=${cred.accessToken}`, {
+    const mediaType = att.type === 'IMAGE' ? 'image' : att.type === 'VIDEO' ? 'video' : 'file';
+    const res = await fetch('https://openapi.zalo.me/v3.0/oa/message/cs', {
       method: 'POST',
-      body: form,
+      headers: this.v3Headers(cred.accessToken),
+      body: JSON.stringify({
+        recipient: { user_id: to },
+        message: {
+          attachment: {
+            type: 'template',
+            payload: {
+              template_type: 'media',
+              elements: [{ media_type: mediaType, url: att.url }],
+            },
+          },
+        },
+      }),
     });
-    const up = (await upRes.json().catch(() => ({}))) as { error_code?: number; data?: { token?: string }; error_message?: string };
-    const token = up?.data?.token;
-    if (Number(up?.error_code ?? -1) !== 0 || !token) {
-      return { error: `Upload ${kind} lên Zalo lỗi: ${up?.error_message ?? JSON.stringify(up).slice(0, 150)}` };
-    }
-
-    // 2) Gửi message kèm token
-    const json = await postJson(`https://openapi.zalo.me/v2.0/oa/message?access_token=${cred.accessToken}`, {
-      recipient: { user_id: to },
-      message: { attachment: { type: kind, payload: { token } } },
-    });
-    const errCode = Number(json?.error ?? json?.error_code ?? -1);
-    if (errCode !== 0) throw new Error(`Zalo OA error ${errCode} ${json?.message ?? json?.error_message ?? ''}`.trim());
+    const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    const err = this.v3Error(json);
+    if (err) return { error: err };
     const data = json?.data as Record<string, unknown> | undefined;
     return { externalId: (data?.message_id as string) ?? undefined };
   }

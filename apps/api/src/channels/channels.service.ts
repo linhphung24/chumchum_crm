@@ -141,78 +141,56 @@ export class ChannelsService {
   }
 
   /**
-   * Đồng bộ hội thoại Zalo OA theo API v3:
-   *  1) GET /v3.0/oa/user/getlist — danh sách người đã tương tác với OA (kèm tên/ảnh)
-   *  2) GET /v3.0/oa/chat/szv2?user_id=... — tối đa 10 tin gần nhất mỗi hội thoại
-   * Chống trùng bằng message_id. Dùng cho nút Đồng bộ + cron 15 phút.
+   * Đồng bộ hội thoại Zalo OA theo API v3 (chuẩn mới):
+   *  1) GET /v3.0/oa/user/getlist?data={"offset","count","is_follower"} — chạy CẢ is_follower=true/false
+   *  2) GET /v3.0/oa/chat/szv2?data={"user_id","offset"} — tối đa 10 tin gần nhất mỗi hội thoại
+   *  Header chuẩn: ZALO_OA_ACCESS_TOKEN. Chống trùng bằng message_id.
    */
   async syncZaloChats(id: string) {
     const account = await this.prisma.channelAccount.findUnique({ where: { id } });
     if (!account || account.type !== 'ZALO_OA') throw new BadRequestException('Chỉ hỗ trợ đồng bộ cho kênh Zalo OA');
     if (!account.credentials?.includes('accessToken')) throw new BadRequestException('Kênh chưa kết nối (thiếu access token)');
-    const cred = JSON.parse(account.credentials) as { accessToken?: string };
-    const token = cred.accessToken as string;
+    const token = (JSON.parse(account.credentials) as { accessToken?: string }).accessToken as string;
 
-    // API v3 yêu cầu access token trong HEADER (không nhận query param như v2)
-    const zaloHeaders = { access_token: token, Authorization: `Bearer ${token}` } as Record<string, string>;
-    const zaloGet = async (path: string) =>
-      fetch(`https://openapi.zalo.me${path}`, { headers: zaloHeaders })
+    const headers = { ZALO_OA_ACCESS_TOKEN: token } as Record<string, string>;
+    const v3Get = async (path: string, payload: Record<string, unknown>) =>
+      fetch(`https://openapi.zalo.me/v3.0/oa/${path}?data=${encodeURIComponent(JSON.stringify(payload))}`, { headers })
         .then((r) => r.json().catch(() => null))
         .catch(() => null) as Promise<Record<string, unknown> | null>;
 
-    // 1) Danh sách user đã tương tác — v3 khắt khe về offset/count:
-    // thử GET với count=10, nếu bị chê (-201) thì thử POST JSON body, dùng cách nào chạy cách đó
-    const users: { user_id?: string; display_name?: string; avatar?: string }[] = [];
+    // 1) Danh sách user đã tương tác — chạy cả follower (true) và đã unfollow (false)
+    const users = new Map<string, { user_id?: string; display_name?: string; avatar?: string }>();
     let listError = '';
-    let usePost = false;
-    for (let offset = 0; offset < 150; offset += 10) {
-      let json: Record<string, unknown> | null = null;
-      if (!usePost) {
-        json = await zaloGet(`/v3.0/oa/user/getlist?offset=${offset}&count=10`);
-        const errCode = Number(json?.error ?? json?.error_code ?? 0);
-        if (errCode === -201) {
-          usePost = true; // chê offset/count trên query → chuyển sang body
-          json = null;
+    for (const isFollower of [true, false]) {
+      for (let offset = 0; offset < 150; offset += 50) {
+        const json = await v3Get('user/getlist', { offset, count: 50, is_follower: isFollower });
+        if (!json) {
+          if (!listError) listError = 'Không gọi được API Zalo (mạng lỗi)';
+          break;
         }
+        const errCode = Number(json?.error ?? json?.error_code ?? 0);
+        const data = json?.data as { users?: { user_id?: string; display_name?: string; avatar?: string }[] } | undefined;
+        if (errCode !== 0 || !Array.isArray(data?.users)) {
+          if (errCode !== 0 && !listError) listError = `Zalo ${errCode}: ${json?.message ?? json?.error_message ?? 'lỗi không rõ'}`;
+          break;
+        }
+        for (const u of data?.users ?? []) {
+          if (u.user_id) users.set(String(u.user_id), u);
+        }
+        if ((data?.users?.length ?? 0) < 50) break;
       }
-      if (usePost) {
-        json = await fetch('https://openapi.zalo.me/v3.0/oa/user/getlist', {
-          method: 'POST',
-          headers: { ...zaloHeaders, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ offset, count: 10 }),
-        })
-          .then((r) => r.json().catch(() => null))
-          .catch(() => null);
-      }
-      if (!json) {
-        listError = 'Không gọi được API Zalo (mạng lỗi)';
-        break;
-      }
-      const errCode = Number(json?.error ?? json?.error_code ?? 0);
-      const data = json?.data as { users?: typeof users } | undefined;
-      if (errCode !== 0 || !Array.isArray(data?.users)) {
-        if (errCode !== 0 && !listError) listError = `Zalo ${errCode}: ${json?.message ?? json?.error_message ?? 'lỗi không rõ'}`;
-        break;
-      }
-      users.push(...(data?.users ?? []));
-      if ((data?.users?.length ?? 0) < 10) break;
     }
-    if (users.length === 0) {
+    if (users.size === 0) {
       throw new BadRequestException(listError || 'Zalo trả về 0 người đã tương tác');
     }
 
     let created = 0;
-    for (const u of users) {
-      const externalUserId = String(u.user_id ?? '');
-      if (!externalUserId) continue;
-
+    for (const [externalUserId, u] of users) {
       const identity = await this.prisma.channelIdentity.findUnique({
         where: { channelAccountId_externalUserId: { channelAccountId: account.id, externalUserId } },
         include: { customer: true },
       });
       let customerId: string;
-      let conversationId: string | undefined;
-
       if (!identity) {
         const customer = await this.prisma.customer.create({
           data: { name: u.display_name || `Khách Zalo ${externalUserId.slice(-4)}`, avatarUrl: u.avatar ?? null },
@@ -229,7 +207,6 @@ export class ChannelsService {
         customerId = customer.id;
       } else {
         customerId = identity.customerId;
-        // Làm giàu tên/ảnh nếu trước đó bị thiếu
         const needName = !identity.customer.name || identity.customer.name.startsWith('Khách');
         if (needName && (u.display_name || u.avatar)) {
           await this.prisma.customer.update({
@@ -244,24 +221,21 @@ export class ChannelsService {
           where: { customerId_channelAccountId: { customerId, channelAccountId: account.id } },
         })) ??
         (await this.prisma.conversation.create({ data: { customerId, channelAccountId: account.id } }));
-      conversationId = conversation.id;
 
-      // 2) 10 tin gần nhất của hội thoại này (szv2) — dedupe theo message_id
-      const chatJson = await zaloGet(`/v3.0/oa/chat/szv2?user_id=${externalUserId}&offset=0`);
+      // 2) 10 tin gần nhất (szv2) — dedupe theo message_id
+      const chatJson = await v3Get('chat/szv2', { user_id: externalUserId, offset: 0 });
       const chatData = chatJson?.data as { messages?: Record<string, unknown>[] } | undefined;
-      const messages = chatData?.messages ?? [];
-      for (const m of messages) {
+      for (const m of chatData?.messages ?? []) {
         const messageId = String(m.message_id ?? m.msg_id ?? '');
         const contentRaw = (m.content ?? m.text ?? '') as unknown;
         const text = typeof contentRaw === 'string' ? contentRaw : ((contentRaw as { text?: string })?.text ?? '');
         if (!messageId || !text) continue;
-        const fromUid = String(m.from_uid ?? '');
-        const direction = fromUid === externalUserId ? 'IN' : 'OUT';
-        const dup = await this.prisma.message.findFirst({ where: { conversationId, externalId: messageId } });
+        const direction = String(m.from_uid ?? '') === externalUserId ? 'IN' : 'OUT';
+        const dup = await this.prisma.message.findFirst({ where: { conversationId: conversation.id, externalId: messageId } });
         if (dup) continue;
         await this.prisma.message.create({
           data: {
-            conversationId,
+            conversationId: conversation.id,
             direction,
             type: 'TEXT',
             text,
@@ -273,16 +247,15 @@ export class ChannelsService {
         created++;
       }
 
-      // Cập nhật tin cuối cho hội thoại (lấy từ message mới nhất vừa có trong DB)
-      const last = await this.prisma.message.findFirst({ where: { conversationId }, orderBy: { createdAt: 'desc' } });
+      const last = await this.prisma.message.findFirst({ where: { conversationId: conversation.id }, orderBy: { createdAt: 'desc' } });
       if (last) {
         await this.prisma.conversation.update({
-          where: { id: conversationId },
+          where: { id: conversation.id },
           data: { lastMessageAt: last.createdAt, lastMessageText: last.text ?? '', lastDirection: last.direction, status: 'OPEN' },
         }).catch(() => undefined);
       }
     }
-    return { ok: true, created, total: users.length };
+    return { ok: true, created, total: users.size };
   }
 
   /**
