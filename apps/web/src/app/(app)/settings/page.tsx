@@ -20,13 +20,16 @@ export default function SettingsPage() {
   const [pwOpen, setPwOpen] = useState(false);
   const [zaloMsg, setZaloMsg] = useState('');
 
-  // Kết quả redirect về từ luồng OAuth Zalo OA (?zalo-oa=ok|fail)
+  // Kết quả redirect về từ luồng OAuth Zalo OA (?zalo-oa=ok|fail) và Facebook (?fb=ok|fail)
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const status = q.get('zalo-oa');
     if (status === 'ok') setZaloMsg(`✅ Đã kết nối Zalo OA "${q.get('name') ?? ''}" qua cấp quyền nhanh`);
     if (status === 'fail') setZaloMsg(`❌ Cấp quyền Zalo OA thất bại: ${q.get('msg') ?? ''}`);
-    if (status) window.history.replaceState({}, '', '/settings');
+    const fb = q.get('fb');
+    if (fb === 'ok') setZaloMsg(`✅ Đã kết nối Facebook Page: ${q.get('name') ?? ''}`);
+    if (fb === 'fail') setZaloMsg(`❌ Cấp quyền Facebook thất bại: ${q.get('msg') ?? ''}`);
+    if (status || fb) window.history.replaceState({}, '', '/settings');
   }, []);
 
   return (
@@ -419,6 +422,7 @@ function ChannelWizard({
       setQr(null);
       setQrWaiting(false);
       setOauthUrl(undefined);
+      setFbOauthUrl(undefined);
     }
   }, [open, editing, initialType]);
 
@@ -430,6 +434,16 @@ function ChannelWizard({
         .catch(() => setOauthUrl(null));
     }
   }, [open, type, oauthUrl]);
+
+  // Facebook: tương tự — Login with Facebook khi server có env FB_APP_ID/SECRET
+  const [fbOauthUrl, setFbOauthUrl] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (open && type === 'FACEBOOK' && fbOauthUrl === undefined) {
+      api<{ url: string | null }>('/channels/facebook/oauth/start')
+        .then((r) => setFbOauthUrl(r.url))
+        .catch(() => setFbOauthUrl(null));
+    }
+  }, [open, type, fbOauthUrl]);
 
   async function runTest() {
     setBusy(true);
@@ -560,6 +574,29 @@ function ChannelWizard({
                   Để bật nút <b>&quot;Đăng nhập Zalo cấp quyền&quot;</b> (1-cú-click, token tự động): tạo app trên developers.zalo.me →
                   điền <code>ZALO_OA_APP_ID</code> + <code>ZALO_OA_APP_SECRET</code> vào file .env trên server → restart API.
                   Chưa có app thì dán token thủ công bên dưới vẫn dùng được.
+                </p>
+              )}
+            </div>
+          )}
+
+          {type === 'FACEBOOK' && (
+            <div className="rounded-xl bg-brand-50 p-3">
+              {fbOauthUrl ? (
+                <>
+                  <p className="mb-2 text-xs font-bold text-ink-soft">Cấp quyền nhanh (khỏi dán token, tự lấy mọi Page):</p>
+                  <a href={fbOauthUrl} className="btn-primary flex items-center justify-center py-2 text-sm">
+                    🔗 Đăng nhập Facebook để cấp quyền
+                  </a>
+                  <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">
+                    Facebook sẽ hỏi chọn Page → hệ thống tự lưu Page Access Token (vĩnh viễn) và <b>tự đăng ký webhook</b> từng Page —
+                    khỏi cấu hình tay.
+                  </p>
+                </>
+              ) : (
+                <p className="text-xs leading-relaxed text-ink-soft">
+                  Để bật nút <b>&quot;Đăng nhập Facebook cấp quyền&quot;</b>: tạo app (loại Business) trên developers.facebook.com, thêm sản phẩm
+                  Messenger, rồi điền <code>FB_APP_ID</code> + <code>FB_APP_SECRET</code> vào file .env trên server → restart API.
+                  Chưa có app thì dán Page Access Token thủ công bên dưới vẫn dùng được.
                 </p>
               )}
             </div>

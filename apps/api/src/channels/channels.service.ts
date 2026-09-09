@@ -391,6 +391,71 @@ export class ChannelsService {
     }
   }
 
+  // ================= Facebook Page — OAuth 1-cú-click (Login with Facebook) =================
+  // Cần env FB_APP_ID + FB_APP_SECRET (FB_VERIFY_TOKEN dùng cho webhook verify).
+  // Luồng: dialog OAuth (scopes pages_*) → code → user token (gia hạn dài hạn) → /me/accounts
+  // lấy Page Access Token (vĩnh viễn) → lưu ChannelAccount + tự subscribe webhook từng page.
+
+  facebookOAuthStart(): { url: string | null } {
+    const appId = process.env.FB_APP_ID;
+    const appSecret = process.env.FB_APP_SECRET;
+    if (!appId || !appSecret) return { url: null };
+    const base = (process.env.PUBLIC_API_BASE_URL ?? 'http://localhost:4000').replace(/\/$/, '');
+    const redirectUri = `${base}/channels/facebook/oauth/callback`;
+    const url =
+      `https://www.facebook.com/v21.0/dialog/oauth?client_id=${encodeURIComponent(appId)}` +
+      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+      `&state=${encodeURIComponent(this.zaloOAuthState(`fb-${randomToken(8)}`))}` +
+      `&scope=${encodeURIComponent('pages_show_list,pages_messaging,pages_read_engagement,pages_manage_metadata,pages_manage_posts')}`;
+    return { url };
+  }
+
+  /** Facebook redirect về callback kèm code → đổi token → lấy danh sách Page → lưu + tự subscribe webhook */
+  async facebookOAuthCallback(code: string, state: string) {
+    const appId = process.env.FB_APP_ID;
+    const appSecret = process.env.FB_APP_SECRET;
+    if (!appId || !appSecret) throw new BadRequestException('Chưa cấu hình FB_APP_ID / FB_APP_SECRET trên server (.env)');
+    if (!this.verifyZaloOAuthState(state)) throw new BadRequestException('State không hợp lệ — bấm "Đăng nhập Facebook" lại từ đầu');
+    const base = (process.env.PUBLIC_API_BASE_URL ?? 'http://localhost:4000').replace(/\/$/, '');
+
+    // 1) code → short-lived user token
+    const tokenJson = await getJson(
+      `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&redirect_uri=${encodeURIComponent(
+        `${base}/channels/facebook/oauth/callback`,
+      )}&code=${encodeURIComponent(code)}`,
+    ).catch(() => null);
+    const shortToken = tokenJson?.access_token as string | undefined;
+    if (!shortToken) throw new BadRequestException(`Facebook không cấp token: ${JSON.stringify(tokenJson).slice(0, 200)}`);
+
+    // 2) gia hạn dài hạn (60 ngày — Page token sinh ra từ cái này là VĨNH VIỄN)
+    const longJson = await getJson(
+      `https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${shortToken}`,
+    ).catch(() => null);
+    const userToken = (longJson?.access_token as string) ?? shortToken;
+
+    // 3) danh sách Page + Page Access Token
+    const pagesJson = await getJson(
+      `https://graph.facebook.com/v21.0/me/accounts?fields=name,access_token,picture.type(large)&limit=50&access_token=${userToken}`,
+    ).catch(() => null);
+    const pages = (pagesJson?.data as { id: string; name: string; access_token: string; picture?: { data?: { url?: string } } }[]) ?? [];
+    if (!pages.length) throw new BadRequestException('Tài khoản Facebook chưa quản lý Page nào (hoặc thiếu quyền pages_show_list)');
+
+    // 4) lưu từng Page + tự subscribe webhook nhận tin nhắn/comment
+    const saved: string[] = [];
+    for (const p of pages) {
+      await this.prisma.channelAccount.upsert({
+        where: { type_externalId: { type: 'FACEBOOK', externalId: p.id } },
+        update: { credentials: JSON.stringify({ pageAccessToken: p.access_token }), isActive: true, name: p.name },
+        create: { type: 'FACEBOOK', externalId: p.id, name: p.name, credentials: JSON.stringify({ pageAccessToken: p.access_token }) },
+      });
+      await fetch(`https://graph.facebook.com/v21.0/${p.id}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_reactions,feed&access_token=${p.access_token}`, {
+        method: 'POST',
+      }).catch(() => undefined);
+      saved.push(p.name);
+    }
+    return { ok: true, pages: saved };
+  }
+
   zaloOaOAuthStart(): { url: string | null } {
     const appId = process.env.ZALO_OA_APP_ID;
     const secret = process.env.ZALO_OA_APP_SECRET;

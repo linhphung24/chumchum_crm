@@ -32,6 +32,27 @@ export class ChannelsOauthController {
     return this.channels.zaloOaOAuthStart();
   }
 
+  /** Facebook Page 1-cú-click: mở dialog Login with Facebook (cần env FB_APP_ID + FB_APP_SECRET) */
+  @Get('facebook/oauth/start')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'MANAGER')
+  facebookStart() {
+    return this.channels.facebookOAuthStart();
+  }
+
+  /** Facebook redirect trình duyệt về đây → lưu Page token + tự subscribe webhook → về Cài đặt */
+  @Get('facebook/oauth/callback')
+  async facebookCallback(@Query('code') code: string, @Query('state') state: string, @Query('error_description') error: string, @Res() res: Response) {
+    const frontend = (process.env.FRONTEND_URL ?? 'http://localhost:3000').replace(/\/$/, '');
+    try {
+      if (!code) throw new Error(error || 'Thiếu mã code');
+      const r = await this.channels.facebookOAuthCallback(code, state);
+      return res.redirect(`${frontend}/settings?fb=ok&name=${encodeURIComponent(r.pages.join(', '))}`);
+    } catch (err) {
+      return res.redirect(`${frontend}/settings?fb=fail&msg=${encodeURIComponent((err as Error).message)}`);
+    }
+  }
+
   /** Zalo redirect trình duyệt về đây (không có JWT) → xử lý xong chuyển về trang Cài đặt */
   @Get('zalo-oa/oauth/callback')
   async zaloOaCallback(
