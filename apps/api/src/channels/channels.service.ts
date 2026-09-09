@@ -160,11 +160,30 @@ export class ChannelsService {
         .then((r) => r.json().catch(() => null))
         .catch(() => null) as Promise<Record<string, unknown> | null>;
 
-    // 1) Danh sách user đã tương tác (phân trang 50/lượt, tối đa 3 lượt)
+    // 1) Danh sách user đã tương tác — v3 khắt khe về offset/count:
+    // thử GET với count=10, nếu bị chê (-201) thì thử POST JSON body, dùng cách nào chạy cách đó
     const users: { user_id?: string; display_name?: string; avatar?: string }[] = [];
     let listError = '';
-    for (const offset of [0, 50, 100]) {
-      const json = await zaloGet(`/v3.0/oa/user/getlist?offset=${offset}&count=50`);
+    let usePost = false;
+    for (let offset = 0; offset < 150; offset += 10) {
+      let json: Record<string, unknown> | null = null;
+      if (!usePost) {
+        json = await zaloGet(`/v3.0/oa/user/getlist?offset=${offset}&count=10`);
+        const errCode = Number(json?.error ?? json?.error_code ?? 0);
+        if (errCode === -201) {
+          usePost = true; // chê offset/count trên query → chuyển sang body
+          json = null;
+        }
+      }
+      if (usePost) {
+        json = await fetch('https://openapi.zalo.me/v3.0/oa/user/getlist', {
+          method: 'POST',
+          headers: { ...zaloHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ offset, count: 10 }),
+        })
+          .then((r) => r.json().catch(() => null))
+          .catch(() => null);
+      }
       if (!json) {
         listError = 'Không gọi được API Zalo (mạng lỗi)';
         break;
@@ -172,11 +191,11 @@ export class ChannelsService {
       const errCode = Number(json?.error ?? json?.error_code ?? 0);
       const data = json?.data as { users?: typeof users } | undefined;
       if (errCode !== 0 || !Array.isArray(data?.users)) {
-        if (!listError) listError = `Zalo ${errCode}: ${json?.message ?? json?.error_message ?? 'lỗi không rõ'}`;
+        if (errCode !== 0 && !listError) listError = `Zalo ${errCode}: ${json?.message ?? json?.error_message ?? 'lỗi không rõ'}`;
         break;
       }
       users.push(...(data?.users ?? []));
-      if ((data?.users?.length ?? 0) < 50) break;
+      if ((data?.users?.length ?? 0) < 10) break;
     }
     if (users.length === 0) {
       throw new BadRequestException(listError || 'Zalo trả về 0 người đã tương tác');
