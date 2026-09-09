@@ -153,13 +153,18 @@ export class ChannelsService {
     const cred = JSON.parse(account.credentials) as { accessToken?: string };
     const token = cred.accessToken as string;
 
+    // API v3 yêu cầu access token trong HEADER (không nhận query param như v2)
+    const zaloHeaders = { access_token: token, Authorization: `Bearer ${token}` } as Record<string, string>;
+    const zaloGet = async (path: string) =>
+      fetch(`https://openapi.zalo.me${path}`, { headers: zaloHeaders })
+        .then((r) => r.json().catch(() => null))
+        .catch(() => null) as Promise<Record<string, unknown> | null>;
+
     // 1) Danh sách user đã tương tác (phân trang 50/lượt, tối đa 3 lượt)
     const users: { user_id?: string; display_name?: string; avatar?: string }[] = [];
     let listError = '';
     for (const offset of [0, 50, 100]) {
-      const json = await getJson(
-        `https://openapi.zalo.me/v3.0/oa/user/getlist?access_token=${token}&offset=${offset}&count=50`,
-      ).catch(() => null);
+      const json = await zaloGet(`/v3.0/oa/user/getlist?offset=${offset}&count=50`);
       if (!json) {
         listError = 'Không gọi được API Zalo (mạng lỗi)';
         break;
@@ -223,9 +228,7 @@ export class ChannelsService {
       conversationId = conversation.id;
 
       // 2) 10 tin gần nhất của hội thoại này (szv2) — dedupe theo message_id
-      const chatJson = await getJson(
-        `https://openapi.zalo.me/v3.0/oa/chat/szv2?access_token=${token}&user_id=${externalUserId}&offset=0`,
-      ).catch(() => null);
+      const chatJson = await zaloGet(`/v3.0/oa/chat/szv2?user_id=${externalUserId}&offset=0`);
       const chatData = chatJson?.data as { messages?: Record<string, unknown>[] } | undefined;
       const messages = chatData?.messages ?? [];
       for (const m of messages) {
