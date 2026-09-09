@@ -13,16 +13,15 @@
 // Đăng nhập bằng QR: bấm "Lấy mã QR" trong CRM → quét bằng app Zalo.
 // (Sau mỗi lần restart bridge cần quét lại — zca-js không lưu được đủ bộ đăng nhập.)
 import { Zalo, ThreadType } from 'zca-js';
+import QRCode from 'qrcode';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
 
 const API_KEY = process.env.API_KEY ?? '';
 const WEBHOOK_URL = process.env.CRM_WEBHOOK_URL ?? '';
 const PORT = Number(process.env.PORT ?? 4100);
 const DATA_DIR = process.env.DATA_DIR ?? '.';
-const QR_PATH = join(DATA_DIR, 'qr.png');
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
 if (!API_KEY || !WEBHOOK_URL) {
@@ -34,6 +33,7 @@ mkdirSync(DATA_DIR, { recursive: true });
 let api = null; // instance zca-js sau đăng nhập
 let loginPromise = null;
 let qrError = '';
+let currentQrDataUrl = null; // QR mới nhất dạng dataURL (zca-js callback lại mỗi khi QR đổi)
 
 /** Đẩy tin khách gửi về webhook ChumChum CRM */
 function onMessage(msg) {
@@ -56,34 +56,34 @@ function onMessage(msg) {
   }
 }
 
-/** Bắt đầu luồng đăng nhập QR (idempotent — nhiều request /qr chỉ tạo 1 luồng) */
+/** Bắt đầu luồng đăng nhập QR (idempotent). zca-js đưa chuỗi code QR → tự render PNG dataURL. */
 function ensureLogin() {
   if (api || loginPromise) return;
   qrError = '';
-  try {
-    rmSync(QR_PATH, { force: true });
-  } catch {
-    /* bỏ qua */
-  }
+  currentQrDataUrl = null;
   loginPromise = (async () => {
     const zalo = new Zalo({ selfListen: false, logging: true });
     const a = await zalo.loginQR(
-      { userAgent: USER_AGENT, qrPath: QR_PATH },
-      (qrPath) => console.log(`Mã QR đã sẵn sàng: ${qrPath} — chờ quét...`),
+      { userAgent: USER_AGENT },
+      async (qrEvent) => {
+        // qrEvent = { type, data: { code, token }, actions } — bắn mỗi khi có QR mới
+        try {
+          const code = qrEvent?.data?.code ?? '';
+          if (code) {
+            currentQrDataUrl = await QRCode.toDataURL(code, { width: 300, margin: 1 });
+            console.log('Mã QR đã sẵn sàng — chờ quét bằng app Zalo...');
+          }
+        } catch (err) {
+          qrError = `render QR lỗi: ${err?.message ?? err}`;
+          console.error(qrError);
+        }
+      },
     );
     api = a;
     api.listener.on('message', onMessage);
     api.listener.start();
     console.log(`✅ Đã đăng nhập Zalo qua QR (uid: ${api.getOwnId?.() ?? '?'}) — đang lắng nghe tin nhắn`);
-    // Lưu phiên tốt nhất có thể (cookie) — restart có thể phải quét lại
-    try {
-      writeFileSync(
-        join(DATA_DIR, 'session.json'),
-        JSON.stringify({ cookie: api.getCookie?.()?.toJSON?.() ?? null, userAgent: USER_AGENT }),
-      );
-    } catch {
-      /* bỏ qua */
-    }
+    currentQrDataUrl = null; // QR đã dùng xong
   })()
     .catch((err) => {
       qrError = err?.message ?? String(err);
@@ -120,14 +120,13 @@ const server = createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/qr') {
     if (api) return json(res, 200, { connected: true });
     ensureLogin();
-    // Chờ thư viện ghi file qr.png (tối đa 30 giây)
-    for (let i = 0; i < 30 && !existsSync(QR_PATH) && !qrError; i++) {
+    // Chờ QR được render (tối đa 30 giây)
+    for (let i = 0; i < 30 && !currentQrDataUrl && !qrError; i++) {
       await new Promise((r) => setTimeout(r, 1000));
     }
     if (qrError) return json(res, 502, { error: `lấy QR lỗi: ${qrError}` });
-    if (!existsSync(QR_PATH)) return json(res, 504, { error: 'QR chưa được tạo sau 30 giây — thử lại' });
-    const dataUrl = `data:image/png;base64,${readFileSync(QR_PATH).toString('base64')}`;
-    return json(res, 200, { qr: dataUrl });
+    if (!currentQrDataUrl) return json(res, 504, { error: 'QR chưa được tạo sau 30 giây — thử lại' });
+    return json(res, 200, { qr: currentQrDataUrl });
   }
 
   if (req.method === 'GET' && url.pathname === '/friends') {
