@@ -177,12 +177,10 @@ export class WebhooksController {
     const attachment = this.extractZaloAttachment(body);
     const externalUserId = body.sender?.id ?? '';
 
-    // Luôn dồn tin về tài khoản ZALO_OA đã kết nối (ưu tiên cái có token) — tránh tách thành
+    // Luôn dồn tin về tài khoản ZALO_OA đã kết nối (ưu tiên cái CÓ token) — tránh tách thành
     // hội thoại rời rạc giữa tài khoản OAuth và tài khoản "default".
-    const account = await this.prisma.channelAccount.findFirst({
-      where: { type: 'ZALO_OA' },
-      orderBy: [{ isActive: 'desc' }, { createdAt: 'asc' }],
-    });
+    const zaloAccounts = await this.prisma.channelAccount.findMany({ where: { type: 'ZALO_OA' } });
+    const account = zaloAccounts.find((a) => a.credentials) ?? zaloAccounts[0];
     const accountExternalId = process.env.ZALO_OA_ID || account?.externalId || 'default';
 
     // Webhook Zalo nhiều khi không kèm tên/ảnh người gửi → lấy qua API profile nếu đã kết nối

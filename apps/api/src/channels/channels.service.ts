@@ -406,11 +406,40 @@ export class ChannelsService {
       refreshToken: token.refresh_token ?? '',
       appId,
     });
-    await this.prisma.channelAccount.upsert({
+    const kept = await this.prisma.channelAccount.upsert({
       where: { type_externalId: { type: 'ZALO_OA', externalId } },
       update: { credentials, isActive: true, name },
       create: { type: 'ZALO_OA', externalId, name, credentials },
     });
+
+    // Hợp nhất: dồn toàn bộ hội thoại/danh tính về tài khoản vừa cấp quyền,
+    // XOÁ các tài khoản ZALO_OA khác (token cũ chết nằm ở đó là nguyên nhân -216 dai dẳng)
+    const others = await this.prisma.channelAccount.findMany({ where: { type: 'ZALO_OA', id: { not: kept.id } } });
+    for (const old of others) {
+      const identities = await this.prisma.channelIdentity.findMany({ where: { channelAccountId: old.id } });
+      for (const idt of identities) {
+        await this.prisma.channelIdentity
+          .update({ where: { id: idt.id }, data: { channelAccountId: kept.id } })
+          .catch(() => this.prisma.channelIdentity.delete({ where: { id: idt.id } }).catch(() => undefined));
+      }
+      const convs = await this.prisma.conversation.findMany({ where: { channelAccountId: old.id } });
+      for (const cv of convs) {
+        const moved = await this.prisma.conversation
+          .update({ where: { id: cv.id }, data: { channelAccountId: kept.id } })
+          .catch(() => null);
+        if (!moved) {
+          // Trùng khách (đã có hội thoại ở tài khoản kept) → chuyển messages sang rồi xoá hội thoại trùng
+          const target = await this.prisma.conversation.findUnique({
+            where: { customerId_channelAccountId: { customerId: cv.customerId, channelAccountId: kept.id } },
+          });
+          if (target) {
+            await this.prisma.message.updateMany({ where: { conversationId: cv.id }, data: { conversationId: target.id } });
+            await this.prisma.conversation.delete({ where: { id: cv.id } }).catch(() => undefined);
+          }
+        }
+      }
+      await this.prisma.channelAccount.delete({ where: { id: old.id } }).catch(() => undefined);
+    }
     return { ok: true, name };
   }
 
