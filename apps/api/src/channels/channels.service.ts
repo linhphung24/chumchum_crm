@@ -105,11 +105,24 @@ export class ChannelsService {
 
   async removeAccount(id: string, purgeCustomers = false) {
     await this.ensureAccount(id);
-    // Danh sách khách của kênh (để xoá sau khi xoá tài khoản)
     const account = await this.prisma.channelAccount.findUnique({
       where: { id },
       include: { identities: { select: { customerId: true } } },
     });
+    // Zalo cá nhân: báo bridge ngắt phiên Zalo luôn (khỏi giữ nick ảo sau khi CRM ngắt kết nối)
+    if (account?.type === 'ZALO_PERSONAL' && account.credentials) {
+      try {
+        const cred = JSON.parse(account.credentials) as { bridgeUrl?: string; apiKey?: string };
+        if (cred.bridgeUrl) {
+          await fetch(`${cred.bridgeUrl.replace(/\/$/, '')}/logout`, {
+            method: 'POST',
+            headers: { 'x-api-key': cred.apiKey ?? '' },
+          }).catch(() => undefined);
+        }
+      } catch {
+        /* bridge có thể offline — bỏ qua */
+      }
+    }
     const customerIds = [...new Set((account?.identities ?? []).map((i) => i.customerId))];
 
     // Xoá tài khoản — cascade xoá hội thoại + tin nhắn + danh tính của kênh này
@@ -488,9 +501,11 @@ export class ChannelsService {
     try {
       const res = await fetch(`${dto.bridgeUrl.replace(/\/$/, '')}/qr`, { headers: this.bridgeHeaders(dto.apiKey) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = (await res.json()) as { qr?: string };
+      const json = (await res.json()) as { qr?: string; connected?: boolean };
+      // Bridge còn phiên cũ (đã đăng nhập) → không có QR, báo cho UI biết để lưu thẳng
+      if (json.connected && !json.qr) return { qr: null, connected: true };
       if (!json.qr) throw new Error('Bridge không trả mã QR');
-      return { qr: json.qr };
+      return { qr: json.qr, connected: false };
     } catch (err) {
       throw new BadRequestException(`Không lấy được mã QR từ bridge — ${(err as Error).message}`);
     }

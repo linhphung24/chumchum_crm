@@ -117,6 +117,20 @@ const server = createServer(async (req, res) => {
     return json(res, 200, { connected: !!api });
   }
 
+  // Ngắt phiên Zalo trên bridge (CRM gọi khi người dùng "Ngắt kết nối" kênh)
+  if (req.method === 'POST' && url.pathname === '/logout') {
+    if (api) {
+      try {
+        api.listener.stop();
+      } catch {
+        /* bỏ qua */
+      }
+      api = null;
+      console.log('🔌 Đã ngắt phiên Zalo trên bridge theo yêu cầu từ CRM');
+    }
+    return json(res, 200, { ok: true });
+  }
+
   if (req.method === 'GET' && url.pathname === '/qr') {
     if (api) return json(res, 200, { connected: true });
     ensureLogin();

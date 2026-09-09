@@ -457,10 +457,14 @@ function ChannelWizard({
     setError('');
     setQr(null);
     try {
-      const r = await api<{ qr: string }>('/channels/zalo-personal/bridge/qr', {
+      const r = await api<{ qr: string | null; connected: boolean }>('/channels/zalo-personal/bridge/qr', {
         method: 'POST',
         body: { bridgeUrl: creds.bridgeUrl ?? '', apiKey: creds.apiKey },
       });
+      if (r.connected && !r.qr) {
+        setTestResult({ ok: true, message: '✅ Bridge vẫn còn phiên Zalo từ lần trước — KHÔNG cần quét QR, bấm "💾 Lưu kết nối" luôn' });
+        return;
+      }
       setQr(r.qr);
     } catch (err) {
       setError((err as Error).message);
