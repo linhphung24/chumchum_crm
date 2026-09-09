@@ -230,12 +230,55 @@ export class WebhooksController {
   @Post('zalo-personal')
   async zaloPersonalPost(@Req() req: Request) {
     // Bridge tự viết, payload đã chuẩn hoá NormalizedIncomingMessage
-    const body = req.body as Partial<NormalizedIncomingMessage> & { senderName?: string; userId?: string };
+    const body = req.body as Partial<NormalizedIncomingMessage> & { senderName?: string; userId?: string; direction?: string };
     await this.log('zalo-personal', 'message', body);
+    const externalUserId = body.externalUserId ?? body.userId ?? '';
+
+    // Tin MÌNH gửi từ app Zalo (direction=OUT) → lưu vào hội thoại, không bật unread/thông báo
+    if (body.direction === 'OUT' && externalUserId && body.externalMessageId) {
+      const account = await this.prisma.channelAccount.findFirst({ where: { type: 'ZALO_PERSONAL' } });
+      if (account) {
+        const identity = await this.prisma.channelIdentity.findUnique({
+          where: { channelAccountId_externalUserId: { channelAccountId: account.id, externalUserId: String(externalUserId) } },
+        });
+        if (identity) {
+          const conversation = await this.prisma.conversation.findUnique({
+            where: { customerId_channelAccountId: { customerId: identity.customerId, channelAccountId: account.id } },
+          });
+          if (conversation) {
+            const dup = await this.prisma.message.findFirst({
+              where: { conversationId: conversation.id, externalId: String(body.externalMessageId) },
+            });
+            if (!dup && body.text) {
+              const message = await this.prisma.message.create({
+                data: {
+                  conversationId: conversation.id,
+                  direction: 'OUT',
+                  type: 'TEXT',
+                  text: body.text,
+                  externalId: String(body.externalMessageId),
+                  status: 'SENT',
+                },
+              });
+              await this.prisma.conversation.update({
+                where: { id: conversation.id },
+                data: { lastMessageAt: message.createdAt, lastMessageText: body.text, lastDirection: 'OUT' },
+              });
+              this.events.emitMessageSent({ conversationId: conversation.id, message });
+              this.events.emitConversationUpdated({
+                conversation: await this.prisma.conversation.findUnique({ where: { id: conversation.id } }),
+              });
+            }
+          }
+        }
+      }
+      return { ok: true };
+    }
+
     await this.ingest.handleIncoming({
       channelType: 'ZALO_PERSONAL',
       accountExternalId: body.accountExternalId ?? 'default',
-      externalUserId: body.externalUserId ?? body.userId ?? '',
+      externalUserId,
       userDisplayName: body.userDisplayName ?? body.senderName,
       text: body.text,
       attachmentUrl: body.attachmentUrl,

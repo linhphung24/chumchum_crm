@@ -324,6 +324,28 @@ export class ZaloPersonalAdapter implements ChannelAdapter {
     return { externalId: (json?.messageId as string) ?? undefined };
   }
 
+  /** Gửi ảnh qua bridge: bridge tải ảnh (URL công khai) về Buffer rồi gửi kèm attachment của zca-js */
+  async sendAttachment(
+    account: { credentials?: string | null; externalId: string },
+    to: string,
+    att: { url: string; type: 'IMAGE' | 'VIDEO' | 'AUDIO' | 'FILE'; filename: string },
+  ): Promise<SendResult> {
+    if (att.type !== 'IMAGE') {
+      return { error: 'Zalo cá nhân hiện chỉ hỗ trợ gửi ảnh (kênh không chính thức)' };
+    }
+    const cred = parseCredentials<{ bridgeUrl?: string; apiKey?: string }>(account.credentials);
+    const bridgeUrl = cred?.bridgeUrl ?? process.env.ZALO_PERSONAL_BRIDGE_URL;
+    const apiKey = cred?.apiKey ?? process.env.ZALO_PERSONAL_BRIDGE_API_KEY;
+    if (!bridgeUrl) return mockSendResult();
+    const json = await postJson(
+      `${bridgeUrl.replace(/\/$/, '')}/send`,
+      { userId: to, text: '', imageUrl: att.url, filename: att.filename },
+      { 'x-api-key': apiKey ?? '' },
+    );
+    if (json?.error) return { error: String(json.error) };
+    return { externalId: (json?.messageId as string) ?? undefined };
+  }
+
   /**
    * Kiểm tra bridge theo contract v2:
    *   GET {bridgeUrl}/status  header x-api-key → { connected: boolean, ... }

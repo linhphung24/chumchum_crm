@@ -35,18 +35,19 @@ let qrError = '';
 let currentQrDataUrl = null; // ảnh QR (dataURL) do chính Zalo sinh trong callback loginQR
 let lastQrEvent = -1; // 0=Generated, 1=Expired, 2=Scanned, 3=Declined, 4=GotLoginInfo
 
-/** Đẩy tin khách gửi về webhook ChumChum CRM */
+/** Đẩy tin về webhook ChumChum CRM — cả tin khách gửi (IN) lẫn tin mình gửi từ app Zalo (OUT) */
 function onMessage(msg) {
   try {
-    if (msg.type !== ThreadType.User || msg.isSelf) return; // bỏ tin nhóm + tin của chính mình
+    if (msg.type !== ThreadType.User) return; // bỏ tin nhóm
     const content = msg.data?.content;
-    if (typeof content !== 'string' || !content) return;
+    if (typeof content !== 'string' || !content) return; // ảnh/file qua zca: chưa hỗ trợ đẩy về
     const payload = JSON.stringify({
       accountExternalId: 'default',
       externalUserId: String(msg.data.uidFrom ?? ''),
-      userDisplayName: msg.data.dName ?? undefined,
+      userDisplayName: msg.isSelf ? undefined : msg.data.dName,
       text: content,
       externalMessageId: String(msg.data.msgId ?? ''),
+      direction: msg.isSelf ? 'OUT' : 'IN',
     });
     fetch(WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload })
       .then((r) => r.body?.cancel?.())
@@ -63,7 +64,7 @@ function ensureLogin() {
   currentQrDataUrl = null;
   lastQrEvent = -1;
   loginPromise = (async () => {
-    const zalo = new Zalo({ selfListen: false, logging: true });
+    const zalo = new Zalo({ selfListen: true, logging: true }); // selfListen để bắt cả tin MÌNH gửi từ app Zalo (đồng bộ về CRM)
     const a = await zalo.loginQR(
       { userAgent: USER_AGENT },
       (qrEvent) => {
@@ -147,9 +148,23 @@ const server = createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/send') {
     if (!api) return json(res, 401, { error: 'bridge chưa đăng nhập — quét mã QR từ CRM trước' });
     const body = await readBody(req);
-    if (!body.userId || !body.text) return json(res, 400, { error: 'body sai định dạng {userId, text}' });
+    if (!body.userId) return json(res, 400, { error: 'thiếu userId' });
+    if (!body.text && !body.imageUrl) return json(res, 400, { error: 'cần text hoặc imageUrl' });
     try {
-      const result = await api.sendMessage(body.text, String(body.userId), ThreadType.User);
+      let result;
+      if (body.imageUrl) {
+        // zca-js cần Buffer file (không nhận URL) → tải về rồi gửi kèm attachment
+        const imgRes = await fetch(body.imageUrl);
+        if (!imgRes.ok) return json(res, 400, { error: `không tải được ảnh từ ${body.imageUrl} (${imgRes.status})` });
+        const buf = Buffer.from(await imgRes.arrayBuffer());
+        result = await api.sendMessage(
+          { msg: body.text || '', attachments: [{ data: buf, filename: body.filename || 'image.png', metadata: { totalSize: buf.length } }] },
+          String(body.userId),
+          ThreadType.User,
+        );
+      } else {
+        result = await api.sendMessage(body.text, String(body.userId), ThreadType.User);
+      }
       return json(res, 200, { messageId: result?.msgId ?? `${Date.now()}-${randomBytes(3).toString('hex')}` });
     } catch (err) {
       return json(res, 502, { error: err?.message ?? String(err) });

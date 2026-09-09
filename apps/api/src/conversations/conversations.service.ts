@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChannelsService } from '../channels/channels.service';
 import { ChannelIngestService } from '../channels/channel-ingest.service';
@@ -12,6 +12,7 @@ const CONVERSATION_INCLUDE = {
 
 @Injectable()
 export class ConversationsService {
+  private readonly logger = new Logger(ConversationsService.name);
   constructor(
     private prisma: PrismaService,
     private channels: ChannelsService,
@@ -123,6 +124,9 @@ export class ConversationsService {
         });
       } catch (err) {
         sendResult = { error: String((err as Error).message ?? err) };
+      }
+      if (sendResult.error) {
+        this.logger.warn(`Gửi file qua ${conv.channelAccount.type} lỗi: ${sendResult.error}`);
       }
     } else {
       sendResult = { mocked: true };
