@@ -59,12 +59,12 @@ services:
     depends_on:
       - api
 
-  # ⚠️ KHÔNG CHÍNH THỨC — Zalo cá nhân qua bridge za-go (rủi ro khóa nick, xem bridges/zalo-za-go/README.md)
+  # ⚠️ KHÔNG CHÍNH THỨC — Zalo cá nhân qua bridge zca-js (rủi ro khóa nick, xem bridges/zalo-zca/README.md)
   # Bật khi cần: docker compose --profile zalo-personal up -d --build zalo-bridge
   zalo-bridge:
     profiles: ["zalo-personal"]
     build:
-      context: ./bridges/zalo-za-go
+      context: ./bridges/zalo-zca
     restart: unless-stopped
     environment:
       API_KEY: ${ZALO_BRIDGE_API_KEY:-doi-key-ca-nhan}
