@@ -154,14 +154,32 @@ export class ChannelsService {
 
     const cred = JSON.parse(account.credentials) as { accessToken?: string };
     const allChats: { user_id?: string; last_message?: { message?: string; timestamp?: number } }[] = [];
+    let firstError = '';
     for (const offset of [0, 50, 100]) {
       const json = await getJson(
         `https://openapi.zalo.me/v2.0/oa/chat?access_token=${cred.accessToken}&offset=${offset}&count=50`,
       ).catch(() => null);
+      if (!json) {
+        firstError = 'Không gọi được API Zalo (mạng/URL)';
+        break;
+      }
+      // Zalo có 2 format lỗi: {error, message} (mới) và {error_code, error_message} (cũ)
+      const errCode = Number(json?.error ?? json?.error_code ?? 0);
       const data = json?.data as { chats?: typeof allChats } | undefined;
-      if (Number(json?.error_code ?? -1) !== 0 || !data?.chats?.length) break;
+      if (errCode !== 0 || !data?.chats?.length) {
+        if (errCode !== 0 && !firstError) {
+          firstError = `Zalo ${errCode}: ${json?.message ?? json?.error_message ?? 'lỗi không rõ'}`;
+        }
+        break;
+      }
       allChats.push(...data.chats);
       if (data.chats.length < 50) break;
+    }
+    if (!firstError && allChats.length === 0) {
+      return { ok: true, created: 0, total: 0, message: 'Zalo trả về 0 hội thoại (OA chưa có ai nhắn tin?)' };
+    }
+    if (firstError && allChats.length === 0) {
+      throw new BadRequestException(`Không đồng bộ được — ${firstError}`);
     }
 
     const zaloOa = this.adapters.get('ZALO_OA');

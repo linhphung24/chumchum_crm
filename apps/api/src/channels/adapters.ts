@@ -151,8 +151,9 @@ export class ZaloOaAdapter implements ChannelAdapter {
       recipient: { user_id: to },
       message: { text },
     });
-    const errorCode = Number(json?.error_code ?? -1);
-    if (errorCode !== 0) throw new Error(`Zalo OA error ${errorCode}: ${JSON.stringify(json).slice(0, 200)}`);
+    // Zalo có 2 format lỗi: {error, message} (mới) và {error_code, error_message} (cũ)
+    const errCode = Number(json?.error ?? json?.error_code ?? 0);
+    if (errCode !== 0) throw new Error(`Zalo ${errCode}: ${json?.message ?? json?.error_message ?? 'lỗi không rõ'}`);
     const data = json?.data as Record<string, unknown> | undefined;
     return { externalId: (data?.message_id as string) ?? undefined };
   }
@@ -219,12 +220,22 @@ export class ZaloOaAdapter implements ChannelAdapter {
         refresh_token: cred.refreshToken,
       }),
     });
-    const json = (await res.json().catch(() => ({}))) as { access_token?: string; refresh_token?: string; error?: number; error_description?: string };
-    if (!json?.access_token) {
-      return { ok: false, message: `Zalo từ chối làm mới token: ${json?.error_description ?? json?.error ?? 'không rõ lỗi'}` };
+    const json = (await res.json().catch(() => ({}))) as {
+      access_token?: string;
+      refresh_token?: string;
+      error?: number;
+      error_description?: string;
+      error_message?: string;
+      data?: { access_token?: string; refresh_token?: string };
+    };
+    // Zalo trả token ở top-level hoặc bọc trong data (tuỳ phiên bản) — nhận cả hai
+    const accessToken = json?.access_token ?? json?.data?.access_token;
+    const newRefresh = json?.refresh_token ?? json?.data?.refresh_token;
+    if (!accessToken) {
+      return { ok: false, message: `Zalo từ chối làm mới token: ${json?.error_description ?? json?.error_message ?? json?.error ?? 'không rõ lỗi'}` };
     }
-    const next: Record<string, string> = { ...cred, accessToken: json.access_token } as Record<string, string>;
-    if (json.refresh_token) next.refreshToken = json.refresh_token; // refresh token cũ hết hiệu lực — thay bằng cái mới
+    const next: Record<string, string> = { ...cred, accessToken } as Record<string, string>;
+    if (newRefresh) next.refreshToken = newRefresh; // refresh token cũ hết hiệu lực — thay bằng cái mới
     return { ok: true, message: 'Đã làm mới access token', credentials: next };
   }
 
@@ -257,8 +268,8 @@ export class ZaloOaAdapter implements ChannelAdapter {
       recipient: { user_id: to },
       message: { attachment: { type: kind, payload: { token } } },
     });
-    const errorCode = Number(json?.error_code ?? -1);
-    if (errorCode !== 0) throw new Error(`Zalo OA error ${errorCode}: ${JSON.stringify(json).slice(0, 200)}`);
+    const errCode = Number(json?.error ?? json?.error_code ?? -1);
+    if (errCode !== 0) throw new Error(`Zalo OA error ${errCode} ${json?.message ?? json?.error_message ?? ''}`.trim());
     const data = json?.data as Record<string, unknown> | undefined;
     return { externalId: (data?.message_id as string) ?? undefined };
   }
