@@ -5,7 +5,6 @@
   "type": "module",
   "description": "Bridge Zalo cá nhân cho ChumChum CRM — dùng thư viện zca-js (https://tdung.gitbook.io/zca-js)",
   "dependencies": {
-    "qrcode": "^1.5.4",
     "zca-js": "^2"
   }
 }

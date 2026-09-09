@@ -13,7 +13,6 @@
 // Đăng nhập bằng QR: bấm "Lấy mã QR" trong CRM → quét bằng app Zalo.
 // (Sau mỗi lần restart bridge cần quét lại — zca-js không lưu được đủ bộ đăng nhập.)
 import { Zalo, ThreadType } from 'zca-js';
-import QRCode from 'qrcode';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
@@ -33,7 +32,8 @@ mkdirSync(DATA_DIR, { recursive: true });
 let api = null; // instance zca-js sau đăng nhập
 let loginPromise = null;
 let qrError = '';
-let currentQrDataUrl = null; // QR mới nhất dạng dataURL (zca-js callback lại mỗi khi QR đổi)
+let currentQrDataUrl = null; // ảnh QR (dataURL) do chính Zalo sinh trong callback loginQR
+let lastQrEvent = -1; // 0=Generated, 1=Expired, 2=Scanned, 3=Declined, 4=GotLoginInfo
 
 /** Đẩy tin khách gửi về webhook ChumChum CRM */
 function onMessage(msg) {
@@ -56,27 +56,26 @@ function onMessage(msg) {
   }
 }
 
-/** Bắt đầu luồng đăng nhập QR (idempotent). zca-js đưa chuỗi code QR → tự render PNG dataURL. */
+/** Bắt đầu luồng đăng nhập QR (idempotent). Callback đưa ẢNH QR do Zalo sinh (data.image base64). */
 function ensureLogin() {
   if (api || loginPromise) return;
   qrError = '';
   currentQrDataUrl = null;
+  lastQrEvent = -1;
   loginPromise = (async () => {
     const zalo = new Zalo({ selfListen: false, logging: true });
     const a = await zalo.loginQR(
       { userAgent: USER_AGENT },
-      async (qrEvent) => {
-        // qrEvent = { type, data: { code, token }, actions } — bắn mỗi khi có QR mới
-        try {
-          const code = qrEvent?.data?.code ?? '';
-          if (code) {
-            currentQrDataUrl = await QRCode.toDataURL(code, { width: 300, margin: 1 });
-            console.log('Mã QR đã sẵn sàng — chờ quét bằng app Zalo...');
-          }
-        } catch (err) {
-          qrError = `render QR lỗi: ${err?.message ?? err}`;
-          console.error(qrError);
+      (qrEvent) => {
+        lastQrEvent = qrEvent?.type ?? -1;
+        // type 0 = QRCodeGenerated: data.image là PNG base64 (thư viện đã strip prefix)
+        if (qrEvent?.type === 0 && qrEvent?.data?.image) {
+          currentQrDataUrl = `data:image/png;base64,${qrEvent.data.image}`;
+          console.log('Mã QR đã sẵn sàng — quét bằng app Zalo (Cài đặt → Đăng nhập thiết bị khác)...');
         }
+        if (qrEvent?.type === 1) console.log('QR hết hạn — bấm Lấy mã QR lại');
+        if (qrEvent?.type === 2) console.log('📱 Đã quét QR — chờ xác nhận trên điện thoại...');
+        if (qrEvent?.type === 3) qrError = 'Bạn đã từ chối đăng nhập trên điện thoại';
       },
     );
     api = a;
