@@ -9,6 +9,8 @@ export interface NormalizedIncomingMessage {
   externalUserId: string;
   userDisplayName?: string;
   userAvatarUrl?: string;
+  /** SĐT khách nếu kênh cung cấp (vd: bridge Zalo cá nhân) — dùng làm giàu hồ sơ */
+  userPhone?: string;
   text?: string;
   attachmentUrl?: string;
   attachmentType?: 'IMAGE' | 'VIDEO' | 'AUDIO' | 'FILE' | 'STICKER';

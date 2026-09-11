@@ -14,6 +14,11 @@ export class BridgeDto {
   @IsOptional()
   @IsString()
   apiKey?: string;
+
+  /** Nick Zalo nào trên bridge (nhiều nick: mỗi nick 1 accountId riêng) */
+  @IsOptional()
+  @IsString()
+  accountId?: string;
 }
 
 /**

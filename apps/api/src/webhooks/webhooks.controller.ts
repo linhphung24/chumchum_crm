@@ -236,7 +236,12 @@ export class WebhooksController {
 
     // Tin MÌNH gửi từ app Zalo (direction=OUT) → lưu vào hội thoại, không bật unread/thông báo
     if (body.direction === 'OUT' && externalUserId && body.externalMessageId) {
-      const account = await this.prisma.channelAccount.findFirst({ where: { type: 'ZALO_PERSONAL' } });
+      // Nhiều nick Zalo: ưu tiên đúng nick theo accountExternalId, thiếu thì về nick đầu tiên
+      const account = body.accountExternalId
+        ? await this.prisma.channelAccount.findUnique({
+            where: { type_externalId: { type: 'ZALO_PERSONAL', externalId: body.accountExternalId } },
+          })
+        : await this.prisma.channelAccount.findFirst({ where: { type: 'ZALO_PERSONAL' } });
       if (account) {
         const identity = await this.prisma.channelIdentity.findUnique({
           where: { channelAccountId_externalUserId: { channelAccountId: account.id, externalUserId: String(externalUserId) } },

@@ -311,15 +311,18 @@ export class ChannelsService {
     const account = await this.prisma.channelAccount.findUnique({ where: { id } });
     if (!account || account.type !== 'ZALO_PERSONAL') throw new BadRequestException('Chỉ hỗ trợ cho kênh Zalo cá nhân');
     const cred = account.credentials
-      ? (JSON.parse(account.credentials) as { bridgeUrl?: string; apiKey?: string })
+      ? (JSON.parse(account.credentials) as { bridgeUrl?: string; apiKey?: string; accountId?: string })
       : {};
     const bridgeUrl = cred.bridgeUrl ?? process.env.ZALO_PERSONAL_BRIDGE_URL;
     const apiKey = cred.apiKey ?? process.env.ZALO_PERSONAL_BRIDGE_API_KEY;
     if (!bridgeUrl) throw new BadRequestException('Chưa cấu hình Bridge URL cho kênh Zalo cá nhân');
 
-    const res = await fetch(`${bridgeUrl.replace(/\/$/, '')}/friends`, {
-      headers: { 'x-api-key': apiKey ?? '' },
-    });
+    const res = await fetch(
+      `${bridgeUrl.replace(/\/$/, '')}/friends${this.bridgeQuery(cred.accountId ?? account.externalId)}`,
+      {
+        headers: { 'x-api-key': apiKey ?? '' },
+      },
+    );
     const json = (await res.json().catch(() => ({}))) as {
       friends?: Record<string, unknown>[];
       error?: string;
@@ -342,12 +345,20 @@ export class ChannelsService {
       if (!externalUserId) continue;
       const displayName = pick(f, ['displayName', 'display_name', 'name']);
       const avatar = pick(f, ['avatar', 'avatarUrl', 'avatar_url']);
+      const phone = pick(f, ['phone', 'phoneNumber', 'phone_number', 'sdt']);
       const existed = await this.prisma.channelIdentity.findUnique({
         where: { channelAccountId_externalUserId: { channelAccountId: account.id, externalUserId } },
+        include: { customer: true },
       });
-      if (existed) continue;
+      if (existed) {
+        // Đã có danh tính → chỉ điền SĐT còn thiếu vào hồ sơ khách
+        if (phone && !existed.customer.phone) {
+          await this.prisma.customer.update({ where: { id: existed.customerId }, data: { phone } }).catch(() => undefined);
+        }
+        continue;
+      }
       const customer = await this.prisma.customer.create({
-        data: { name: displayName || `Bạn bè Zalo ${externalUserId.slice(-4)}`, avatarUrl: avatar || null },
+        data: { name: displayName || `Bạn bè Zalo ${externalUserId.slice(-4)}`, avatarUrl: avatar || null, phone: phone || null },
       });
       await this.prisma.channelIdentity.create({
         data: {
@@ -361,6 +372,148 @@ export class ChannelsService {
       created++;
     }
     return { ok: true, created, total: friends.length };
+  }
+
+  // ================= Đồng bộ tin nhắn cũ (kênh nào có API lấy lịch sử thì làm) =================
+
+  /** Dispatcher đồng bộ tin cũ theo loại kênh — endpoint /channel-accounts/:id/sync-chats */
+  async syncChats(id: string): Promise<{ ok: boolean; created?: number; total?: number; message?: string }> {
+    const account = await this.prisma.channelAccount.findUnique({ where: { id } });
+    if (!account) throw new NotFoundException('Không tìm thấy tài khoản kênh');
+    switch (account.type) {
+      case 'ZALO_OA':
+        return this.syncZaloChats(id);
+      case 'FACEBOOK':
+        return this.syncMetaChats(account, 'FACEBOOK');
+      case 'INSTAGRAM':
+        return this.syncMetaChats(account, 'INSTAGRAM');
+      case 'ZALO_PERSONAL':
+        return this.syncZaloPersonalChats(account);
+      default:
+        throw new BadRequestException('Kênh này không hỗ trợ đồng bộ tin nhắn cũ (TikTok/Shopee không cấp API lịch sử chat)');
+    }
+  }
+
+  /**
+   * Đồng bộ hội thoại cũ Messenger / Instagram qua Graph API:
+   *   GET /{pageId}/conversations?fields=participants,messages.limit(N){id,from,message,created_time}
+   * IN → pipeline handleIncoming (tự làm giàu tên/ảnh khách); OUT → ingestOutgoingEcho.
+   * Chống trùng theo message id. Ghi chú: Graph API giới hạn ~25 hội thoại gần nhất / lần gọi.
+   */
+  private async syncMetaChats(account: { id: string; type: string; externalId: string; credentials?: string | null }, channelType: 'FACEBOOK' | 'INSTAGRAM') {
+    const cred = account.credentials ? (JSON.parse(account.credentials) as { pageAccessToken?: string }) : {};
+    if (!cred.pageAccessToken) throw new BadRequestException('Kênh chưa kết nối (thiếu Page Access Token)');
+    const platform = channelType === 'INSTAGRAM' ? '&platform=instagram' : '';
+    const url =
+      `https://graph.facebook.com/v21.0/${account.externalId}/conversations` +
+      `?fields=participants,updated_time,messages.limit(30){id,from,message,created_time}&limit=25${platform}` +
+      `&access_token=${cred.pageAccessToken}`;
+    const json = await getJson(url).catch((err: Error) => {
+      throw new BadRequestException(`Graph API lỗi: ${err.message}`);
+    });
+    const threads = (json?.data as Record<string, unknown>[] | undefined) ?? [];
+    if (threads.length === 0) throw new BadRequestException('Không lấy được hội thoại nào (kiểm tra quyền pages_messaging / token)');
+
+    let created = 0;
+    for (const thread of threads) {
+      const participants = (thread.participants as { data?: { id?: string; name?: string }[] } | undefined)?.data ?? [];
+      const other = participants.find((p) => p.id && p.id !== account.externalId);
+      if (!other?.id) continue; // thread của chính page / dữ liệu lạ
+      const msgs = ((thread.messages as { data?: Record<string, unknown>[] } | undefined)?.data ?? []).slice().reverse(); // cũ → mới
+      for (const m of msgs) {
+        const mid = m.id as string | undefined;
+        const fromId = (m.from as { id?: string } | undefined)?.id;
+        const text = (m.message as string | undefined) ?? '';
+        if (!mid || !fromId || !text) continue; // sticker/ảnh không có text — bỏ qua
+        const ts = m.created_time ? new Date(m.created_time as string) : undefined;
+        if (fromId === other.id) {
+          const r = await this.ingest.handleIncoming({
+            channelType,
+            accountExternalId: account.externalId,
+            externalUserId: other.id,
+            userDisplayName: other.name,
+            text,
+            externalMessageId: mid,
+            timestamp: ts,
+          });
+          if (r) created++;
+        } else {
+          // tin page gửi (staff trả lời trên Messenger/DM) → echo
+          const ok = await this.ingest.ingestOutgoingEcho({
+            channelType,
+            accountExternalId: account.externalId,
+            externalUserId: other.id,
+            text,
+            externalMessageId: mid,
+            timestamp: ts,
+          });
+          if (ok) created++;
+        }
+      }
+    }
+    return { ok: true, created, total: threads.length };
+  }
+
+  /**
+   * Đồng bộ hội thoại cũ Zalo cá nhân qua bridge:
+   *   GET {BRIDGE_URL}/chats?accountId=&limit=20   header x-api-key
+   *   → { chats: [ { userId, displayName?, avatar?, phone?, messages: [
+   *        { id, text?, timestamp (ms), direction: 'IN'|'OUT' } ] } ] }
+   * Bridge 1 nick bỏ qua accountId vẫn chạy. Chống trùng theo message id.
+   */
+  private async syncZaloPersonalChats(account: { id: string; externalId: string; credentials?: string | null }) {
+    const cred = account.credentials
+      ? (JSON.parse(account.credentials) as { bridgeUrl?: string; apiKey?: string; accountId?: string })
+      : {};
+    const bridgeUrl = cred.bridgeUrl ?? process.env.ZALO_PERSONAL_BRIDGE_URL;
+    const apiKey = cred.apiKey ?? process.env.ZALO_PERSONAL_BRIDGE_API_KEY;
+    if (!bridgeUrl) throw new BadRequestException('Chưa cấu hình Bridge URL cho kênh Zalo cá nhân');
+    const accountId = cred.accountId ?? account.externalId;
+    const q = this.bridgeQuery(accountId) + (this.bridgeQuery(accountId) ? '&' : '?') + 'limit=20';
+    const res = await fetch(`${bridgeUrl.replace(/\/$/, '')}/chats${q}`, { headers: this.bridgeHeaders(apiKey) });
+    const json = (await res.json().catch(() => ({}))) as {
+      chats?: { userId?: string; displayName?: string; avatar?: string; phone?: string; messages?: Record<string, unknown>[] }[];
+      error?: string;
+    };
+    if (!res.ok) throw new BadRequestException(`Bridge lỗi: ${json?.error ?? res.status}`);
+    const chats = Array.isArray(json.chats) ? json.chats : [];
+    if (chats.length === 0) throw new BadRequestException('Bridge không trả hội thoại nào (cần contract /chats — xem docs)');
+
+    let created = 0;
+    for (const chat of chats) {
+      if (!chat.userId) continue;
+      for (const m of chat.messages ?? []) {
+        const mid = String(m.id ?? '');
+        const text = (m.text as string | undefined) ?? '';
+        if (!mid || !text) continue;
+        const ts = m.timestamp ? new Date(Number(m.timestamp)) : undefined;
+        if (String(m.direction ?? 'IN') === 'OUT') {
+          const ok = await this.ingest.ingestOutgoingEcho({
+            channelType: 'ZALO_PERSONAL',
+            accountExternalId: account.externalId,
+            externalUserId: chat.userId,
+            text,
+            externalMessageId: mid,
+            timestamp: ts,
+          });
+          if (ok) created++;
+        } else {
+          const r = await this.ingest.handleIncoming({
+            channelType: 'ZALO_PERSONAL',
+            accountExternalId: account.externalId,
+            externalUserId: chat.userId,
+            userDisplayName: chat.displayName,
+            userAvatarUrl: chat.avatar,
+            userPhone: chat.phone,
+            text,
+            externalMessageId: mid,
+            timestamp: ts,
+          });
+          if (r) created++;
+        }
+      }
+    }
+    return { ok: true, created, total: chats.length };
   }
 
   // ================= Zalo OA — OAuth v4 PKCE (1-cú-click, cần env ZALO_OA_APP_ID + ZALO_OA_APP_SECRET) =================
@@ -562,9 +715,17 @@ export class ChannelsService {
     return { 'x-api-key': apiKey ?? '' };
   }
 
-  async bridgeQr(dto: { bridgeUrl: string; apiKey?: string }) {
+  /** Query phân biệt nick trên bridge nhiều phiên (bridge 1 nick có thể bỏ qua) */
+  private bridgeQuery(accountId?: string): string {
+    return accountId ? `?accountId=${encodeURIComponent(accountId)}` : '';
+  }
+
+  async bridgeQr(dto: { bridgeUrl: string; apiKey?: string; accountId?: string }) {
     try {
-      const res = await fetch(`${dto.bridgeUrl.replace(/\/$/, '')}/qr`, { headers: this.bridgeHeaders(dto.apiKey) });
+      const res = await fetch(
+        `${dto.bridgeUrl.replace(/\/$/, '')}/qr${this.bridgeQuery(dto.accountId)}`,
+        { headers: this.bridgeHeaders(dto.apiKey) },
+      );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json()) as { qr?: string; connected?: boolean };
       // Bridge còn phiên cũ (đã đăng nhập) → không có QR, báo cho UI biết để lưu thẳng
@@ -576,9 +737,12 @@ export class ChannelsService {
     }
   }
 
-  async bridgeStatus(dto: { bridgeUrl: string; apiKey?: string }) {
+  async bridgeStatus(dto: { bridgeUrl: string; apiKey?: string; accountId?: string }) {
     try {
-      const res = await fetch(`${dto.bridgeUrl.replace(/\/$/, '')}/status`, { headers: this.bridgeHeaders(dto.apiKey) });
+      const res = await fetch(
+        `${dto.bridgeUrl.replace(/\/$/, '')}/status${this.bridgeQuery(dto.accountId)}`,
+        { headers: this.bridgeHeaders(dto.apiKey) },
+      );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json().catch(() => ({}))) as { connected?: boolean };
       return { connected: json.connected === true };

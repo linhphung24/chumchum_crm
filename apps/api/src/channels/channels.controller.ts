@@ -75,11 +75,11 @@ export class ChannelsController {
     return this.channels.refreshAccount(id);
   }
 
-  /** Đồng bộ hội thoại gần đây từ Zalo OA về inbox (dùng khi mới kết nối) */
+  /** Đồng bộ hội thoại/tin nhắn cũ về inbox (Zalo OA, Messenger, Instagram, Zalo cá nhân qua bridge) */
   @Post(':id/sync-chats')
   @Roles('ADMIN', 'MANAGER')
   syncChats(@Param('id') id: string) {
-    return this.channels.syncZaloChats(id);
+    return this.channels.syncChats(id);
   }
 
   /** Đồng bộ danh sách bạn bè từ Zalo cá nhân (bridge) về làm khách hàng */

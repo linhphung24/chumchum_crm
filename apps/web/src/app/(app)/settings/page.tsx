@@ -9,6 +9,7 @@ import { ChannelPill } from '@/components/charts';
 
 const TABS = [
   { key: 'channels', label: '🔗 Kênh' },
+  { key: 'notify', label: '🔔 Thông báo đơn' },
   { key: 'domains', label: '🌐 Domain' },
   { key: 'users', label: '👥 Người dùng' },
   { key: 'trello', label: '🗂 Trello' },
@@ -63,6 +64,7 @@ export default function SettingsPage() {
         <NotificationsCard />
 
         {tab === 'channels' && <ChannelsTab />}
+        {tab === 'notify' && <OrderNotifyTab />}
         {tab === 'domains' && <DomainsTab />}
         {tab === 'users' && <UsersTab canEdit={me?.role === 'ADMIN'} meId={me?.id} />}
         {tab === 'trello' && <TrelloTab />}
@@ -262,7 +264,7 @@ const CHANNEL_GUIDES: Record<
     ],
   },
   ZALO_PERSONAL: {
-    intro: 'Zalo cá nhân qua "bridge" tự host — kết nối bằng mã QR như đăng nhập Zalo Web.',
+    intro: 'Zalo cá nhân qua "bridge" tự host — kết nối bằng mã QR như đăng nhập Zalo Web. CÓ THỂ THÊM NHIỀU NICK: bấm "➕ Thêm nick" cho từng tài khoản, mỗi nick một Account ID riêng trên bridge.',
     risk: 'Zalo KHÔNG có API chính thức cho tài khoản cá nhân. Bridge vi phạm điều khoản Zalo — tài khoản CÓ THỂ BỊ KHÓA. Ưu tiên dùng Zalo OA nếu có thể.',
     steps: [
       { text: 'Tự host 1 bridge service hỗ trợ contract /qr + /status (xem docs/HUONG-DAN-KET-NOI.md)' },
@@ -272,6 +274,7 @@ const CHANNEL_GUIDES: Record<
     fields: [
       { key: 'bridgeUrl', label: 'Bridge URL', placeholder: 'https://bridge.cua-ban.com' },
       { key: 'apiKey', label: 'Bridge API Key', secret: true },
+      { key: 'accountId', label: 'Account ID trên bridge', placeholder: 'mặc định = ID kênh; đặt riêng nếu bridge quản lý nhiều nick' },
     ],
   },
 };
@@ -329,18 +332,54 @@ function ChannelsTab() {
                 >
                   ⚙️ {main?.hasCredentials ? 'Sửa kết nối' : 'Kết nối'}
                 </button>
+                {accs.length > 0 && (
+                  <button
+                    className="btn-secondary px-3 py-1.5 text-xs"
+                    title="Thêm tài khoản khác cùng kênh (vd: thêm nick Zalo)"
+                    onClick={() => {
+                      setWizType(type);
+                      setEditing(null);
+                      setOpen(true);
+                    }}
+                  >
+                    ➕ Thêm nick
+                  </button>
+                )}
               </div>
             </div>
             {accs.length > 0 ? (
               <div className="mt-2 space-y-1 text-xs text-ink-soft">
                 {accs.map((a) => (
-                  <div key={a.id} className="flex items-center gap-2">
+                  <div key={a.id} className="flex flex-wrap items-center gap-2">
                     <span className={a.hasCredentials ? 'text-emerald-600' : 'text-amber-600'}>
                       {a.hasCredentials ? '✅ Đã kết nối' : '🟡 Chưa có token'}
                     </span>
-                    <span>· {a.name}</span>
+                    <span className="truncate">
+                      · {a.name} <span className="text-ink-faint">({a.externalId})</span>
+                    </span>
                     <span>· {a._count?.conversations ?? 0} hội thoại</span>
                     {!a.isActive && <span className="font-bold text-neutral-500">· ĐÃ TẮT</span>}
+                    <span className="ml-auto flex shrink-0 gap-2">
+                      <button
+                        className="font-semibold text-ink-faint hover:text-brand-600"
+                        onClick={async () => {
+                          await api(`/channel-accounts/${a.id}`, { method: 'PATCH', body: { isActive: !a.isActive } });
+                          load();
+                        }}
+                      >
+                        {a.isActive ? 'Tắt' : 'Bật'}
+                      </button>
+                      <button
+                        className="font-semibold text-brand-600 hover:underline"
+                        onClick={() => {
+                          setWizType(type);
+                          setEditing(a);
+                          setOpen(true);
+                        }}
+                      >
+                        ✏️ Sửa
+                      </button>
+                    </span>
                   </div>
                 ))}
               </div>
@@ -473,7 +512,7 @@ function ChannelWizard({
     try {
       const r = await api<{ qr: string | null; connected: boolean }>('/channels/zalo-personal/bridge/qr', {
         method: 'POST',
-        body: { bridgeUrl: creds.bridgeUrl ?? '', apiKey: creds.apiKey },
+        body: { bridgeUrl: creds.bridgeUrl ?? '', apiKey: creds.apiKey, accountId: creds.accountId ?? '' },
       });
       if (r.connected && !r.qr) {
         setTestResult({ ok: true, message: '✅ Bridge vẫn còn phiên Zalo từ lần trước — KHÔNG cần quét QR, bấm "💾 Lưu kết nối" luôn' });
@@ -494,7 +533,7 @@ function ChannelWizard({
       try {
         const r = await api<{ connected: boolean }>('/channels/zalo-personal/bridge/status', {
           method: 'POST',
-          body: { bridgeUrl: creds.bridgeUrl ?? '', apiKey: creds.apiKey },
+          body: { bridgeUrl: creds.bridgeUrl ?? '', apiKey: creds.apiKey, accountId: creds.accountId ?? '' },
         });
         if (r.connected) {
           setTestResult({ ok: true, message: '✅ Bridge đã đăng nhập Zalo — bấm "Lưu kết nối"' });
@@ -662,7 +701,7 @@ function ChannelWizard({
                     setTestResult(null);
                     try {
                       const r = await api<{ ok: boolean; created: number; total: number }>(`/channel-accounts/${editing.id}/sync-chats`, { method: 'POST' });
-                      setTestResult({ ok: true, message: `⬇️ Đã đồng bộ ${r.total} người đã chat về inbox (nhập thêm ${r.created} tin cũ)` });
+                      setTestResult({ ok: true, message: `⬇️ Đã đồng bộ ${r.total} hội thoại về inbox (nhập thêm ${r.created} tin cũ)` });
                     } catch (err) {
                       setError((err as Error).message);
                     } finally {
@@ -673,6 +712,27 @@ function ChannelWizard({
                   ⬇️ Đồng bộ hội thoại gần đây từ Zalo
                 </button>
               </div>
+            )}
+            {['FACEBOOK', 'INSTAGRAM', 'ZALO_PERSONAL'].includes(type) && editing && (
+              <button
+                className="btn-secondary w-full py-2 text-sm"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  setError('');
+                  setTestResult(null);
+                  try {
+                    const r = await api<{ ok: boolean; created?: number; total?: number }>(`/channel-accounts/${editing.id}/sync-chats`, { method: 'POST' });
+                    setTestResult({ ok: true, message: `⬇️ Đồng bộ ${r.total ?? 0} hội thoại — nhập thêm ${r.created ?? 0} tin cũ về inbox` });
+                  } catch (err) {
+                    setError((err as Error).message);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                ⬇️ Đồng bộ tin nhắn cũ về inbox
+              </button>
             )}
             {type === 'ZALO_PERSONAL' && editing && (
               <button
@@ -740,7 +800,10 @@ function ChannelWizard({
                 setBusy(true);
                 setError('');
                 try {
-                  const finalExternalId = externalId || testResult?.externalId || `manual-${type}`;
+                  // Nhiều nick: externalId ưu tiên accountId người dùng gõ (khớp nick trên bridge);
+                  // fallback kèm mã ngẫu nhiên để nick thứ 2 không đụng nick thứ 1
+                  const finalExternalId =
+                    externalId || creds.accountId || testResult?.externalId || `manual-${type}-${Date.now().toString(36).slice(-5)}`;
                   if (editing) {
                     await api(`/channel-accounts/${editing.id}`, { method: 'PATCH', body: { name, credentials: creds } });
                   } else {
@@ -798,6 +861,196 @@ interface DomainRow {
   method?: string | null;
   verifiedAt?: string | null;
   externalCodes?: string[];
+}
+
+// ================= THÔNG BÁO ĐỔI TRẠNG THÁI ĐƠN =================
+
+interface NotifyStatusCfg {
+  enabled: boolean;
+  template: string;
+}
+interface NotifySettings {
+  enabled: boolean;
+  shopName: string;
+  statuses: Record<string, NotifyStatusCfg>;
+}
+
+const NOTIFY_STATUSES: { key: string; label: string; hint: string }[] = [
+  { key: 'NEW', label: '🧾 Đã tiếp nhận', hint: 'gửi ngay khi đơn được tạo' },
+  { key: 'CONFIRMED', label: '👩‍🍳 Đang xử lý', hint: 'đơn đã được duyệt, đang chuẩn bị' },
+  { key: 'SHIPPING', label: '🚚 Đang giao hàng', hint: 'đơn đã giao cho shipper' },
+  { key: 'COMPLETED', label: '✅ Hoàn thành', hint: 'đã giao thành công' },
+  { key: 'CANCELLED', label: '😢 Đã huỷ', hint: 'đơn bị huỷ' },
+];
+
+function OrderNotifyTab() {
+  const [settings, setSettings] = useState<NotifySettings | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [previewText, setPreviewText] = useState('');
+  const [orders, setOrders] = useState<{ id: string; code: string; customer: { name: string } }[]>([]);
+  const [pickOrder, setPickOrder] = useState('');
+  const [pickStatus, setPickStatus] = useState('SHIPPING');
+
+  async function load() {
+    setSettings(await api<NotifySettings>('/order-notify/settings'));
+  }
+  useEffect(() => {
+    load();
+    api<typeof orders>('/orders').then((r) => {
+      setOrders(r.slice(0, 20));
+      if (r[0]) setPickOrder(r[0].id);
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (!settings) {
+    return <div className="card"><div className="flex justify-center py-8"><Spinner className="h-6 w-6" /></div></div>;
+  }
+
+  const update = (patch: Partial<NotifySettings>) => setSettings({ ...settings, ...patch });
+  const updateStatus = (key: string, patch: Partial<NotifyStatusCfg>) =>
+    setSettings({ ...settings, statuses: { ...settings.statuses, [key]: { ...settings.statuses[key], ...patch } } });
+
+  return (
+    <div className="space-y-4">
+      <div className="card space-y-3 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-extrabold">🔔 Tự gửi tin cho khách khi đơn đổi trạng thái</h2>
+            <p className="mt-0.5 text-xs leading-relaxed text-ink-soft">
+              Tin được gửi ngay trong hội thoại chat của khách (ưu tiên kênh nguồn của đơn — Zalo/Messenger/...).
+              Kéo card Trello đổi trạng thái cũng tự gửi.
+            </p>
+          </div>
+          <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm font-bold">
+            <input
+              type="checkbox"
+              checked={settings.enabled}
+              onChange={(e) => update({ enabled: e.target.checked })}
+              className="h-5 w-5 accent-brand-500"
+            />
+            {settings.enabled ? 'Đang BẬT' : 'Đang TẮT'}
+          </label>
+        </div>
+        <div>
+          <label className="label">Tên shop (dùng trong biến {'{{shop}}'})</label>
+          <input className="input" value={settings.shopName} onChange={(e) => update({ shopName: e.target.value })} />
+        </div>
+        <p className="rounded-lg bg-brand-50 px-3 py-2 text-[11px] leading-relaxed text-ink-soft">
+          Biến dùng được: <code>{'{{khach}}'}</code> tên khách · <code>{'{{ma}}'}</code> mã đơn · <code>{'{{tong}}'}</code> tổng tiền ·{' '}
+          <code>{'{{sanPham}}'}</code> danh sách sản phẩm · <code>{'{{diaChi}}'}</code> địa chỉ giao · <code>{'{{shop}}'}</code> tên shop
+        </p>
+      </div>
+
+      {NOTIFY_STATUSES.map((s) => {
+        const cfg = settings.statuses[s.key];
+        if (!cfg) return null;
+        return (
+          <div key={s.key} className={`card p-4 ${cfg.enabled ? '' : 'opacity-80'}`}>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div>
+                <span className="text-sm font-extrabold">{s.label}</span>
+                <span className="ml-2 text-[11px] text-ink-faint">{s.hint}</span>
+              </div>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs font-bold text-ink-soft">
+                <input
+                  type="checkbox"
+                  checked={cfg.enabled}
+                  onChange={(e) => updateStatus(s.key, { enabled: e.target.checked })}
+                  className="h-4 w-4 accent-brand-500"
+                />
+                Gửi
+              </label>
+            </div>
+            <textarea
+              className="input font-mono text-xs"
+              rows={4}
+              value={cfg.template}
+              onChange={(e) => updateStatus(s.key, { template: e.target.value })}
+            />
+          </div>
+        );
+      })}
+
+      <div className="card space-y-3 p-4">
+        <h3 className="text-sm font-extrabold">🧪 Xem trước / gửi thử</h3>
+        <div className="flex flex-wrap gap-2">
+          <select className="input w-auto flex-1" value={pickOrder} onChange={(e) => setPickOrder(e.target.value)}>
+            {orders.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.code} · {o.customer?.name}
+              </option>
+            ))}
+          </select>
+          <select className="input w-auto" value={pickStatus} onChange={(e) => setPickStatus(e.target.value)}>
+            {NOTIFY_STATUSES.map((s) => (
+              <option key={s.key} value={s.key}>{s.label}</option>
+            ))}
+          </select>
+          <button
+            className="btn-secondary text-xs"
+            disabled={busy || !pickOrder}
+            onClick={async () => {
+              setBusy(true);
+              setPreviewText('');
+              try {
+                const r = await api<{ text?: string; error?: string }>(`/order-notify/test/${pickOrder}?status=${pickStatus}`, { method: 'POST' });
+                setPreviewText(r.text ?? r.error ?? '');
+              } catch (err) {
+                setPreviewText(`❌ ${(err as Error).message}`);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            👁 Xem trước
+          </button>
+          <button
+            className="btn-primary text-xs"
+            disabled={busy || !pickOrder}
+            onClick={async () => {
+              if (!window.confirm('Gửi thử THẬT vào hội thoại của khách hàng đã chọn?')) return;
+              setBusy(true);
+              setPreviewText('');
+              try {
+                const r = await api<{ ok: boolean; message: string; text?: string }>(`/order-notify/test/${pickOrder}?status=${pickStatus}&send=1`, { method: 'POST' });
+                setPreviewText(`${r.ok ? '✅' : '❌'} ${r.message}`);
+              } catch (err) {
+                setPreviewText(`❌ ${(err as Error).message}`);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            📤 Gửi thử
+          </button>
+        </div>
+        {previewText && <pre className="whitespace-pre-wrap rounded-xl bg-brand-50 p-3 text-xs leading-relaxed text-ink">{previewText}</pre>}
+      </div>
+
+      {msg && <p className="text-xs font-semibold">{msg}</p>}
+      <button
+        className="btn-primary w-full py-2.5"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setMsg('');
+          try {
+            await api('/order-notify/settings', { method: 'PUT', body: settings });
+            setMsg('✅ Đã lưu cài đặt thông báo');
+            load();
+          } catch (err) {
+            setMsg(`❌ ${(err as Error).message}`);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? <Spinner className="border-white/40 border-t-white" /> : '💾 Lưu cài đặt'}
+      </button>
+    </div>
+  );
 }
 
 function DomainsTab() {

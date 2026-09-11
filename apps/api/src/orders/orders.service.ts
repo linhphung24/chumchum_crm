@@ -145,6 +145,7 @@ export class OrdersService {
     });
     this.events.emitOrderUpdated({ order });
     this.bus.emitOrderChanged(order.id);
+    this.bus.emitOrderStatusChanged(order.id);
     return order;
   }
 

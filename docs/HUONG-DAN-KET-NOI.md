@@ -136,13 +136,15 @@ TikTok Business Messaging **không mở tự do**, phải nộp đơn:
 
 > **Zalo không có API chính thức cho tài khoản cá nhân.** Kênh này chạy qua "bridge" tự host — vi phạm điều khoản Zalo, **tài khoản có thể bị khoá bất cứ lúc nào**. Khuyến nghị dùng Zalo OA thay thế. Chỉ bật nếu bạn chấp nhận rủi ro.
 
+### 7.1. Kết nối 1 nick
+
 1. Tự host một bridge service (service trung gian đăng nhập Zalo cá nhân và nhận/gửi tin) — hợp đồng API bridge:
-   - `POST {BRIDGE_URL}/send` — body `{ userId, text }`, header `x-api-key: BRIDGE_API_KEY` → trả `{ messageId }`
+   - `POST {BRIDGE_URL}/send` — body `{ accountId, userId, text }`, header `x-api-key: BRIDGE_API_KEY` → trả `{ messageId }`
    - `GET {BRIDGE_URL}/qr` — header `x-api-key` → trả `{ qr: "<dataURL hoặc chuỗi QR>" }` — **mã QR để đăng nhập Zalo (như Zalo Web)**
    - `GET {BRIDGE_URL}/status` — header `x-api-key` → trả `{ connected: true|false }` — trạng thái đã quét QR đăng nhập chưa
    - Khi có tin đến: bridge POST payload chuẩn hoá về `https://api.chumchumbakery.com/webhooks/zalo-personal`:
      ```json
-     { "externalUserId": "...", "userDisplayName": "...", "text": "..." }
+     { "accountExternalId": "zalo-1", "externalUserId": "...", "userDisplayName": "...", "text": "..." }
      ```
 2. Kết nối ngay trong app: **Cài đặt → Kênh → Zalo cá nhân → Kết nối** → điền Bridge URL + API key → bấm **"📱 Lấy mã QR"** → quét bằng app Zalo trên điện thoại → chờ trạng thái "đã đăng nhập" → **Lưu kết nối**. (Không cần sửa .env.)
 3. Hoặc cấu hình mặc định qua `apps/api/.env`:
@@ -150,6 +152,45 @@ TikTok Business Messaging **không mở tự do**, phải nộp đơn:
    ZALO_PERSONAL_BRIDGE_URL=https://bridge-cua-ban.xxx
    ZALO_PERSONAL_BRIDGE_API_KEY=ma-bao-mat
    ```
+
+### 7.2. Nhiều tài khoản Zalo cá nhân (nhiều nick)
+
+Hệ thống hỗ trợ **không giới hạn số nick** — mỗi nick là một "tài khoản kênh" riêng, hội thoại tách độc lập. Cách làm:
+
+**Bước 1 — Bridge giữ nhiều phiên:** bridge của bạn phải duy trì nhiều phiên đăng nhập Zalo cùng lúc, mỗi nick gán một mã định danh riêng (accountId). Ví dụ: `zalo-0987`, `zalo-0903` (hoặc dùng luôn số điện thoại). Mọi endpoint nhận thêm query `?accountId=...`:
+- `GET {BRIDGE_URL}/qr?accountId=zalo-0987` → QR riêng cho nick đó
+- `GET {BRIDGE_URL}/status?accountId=zalo-0987`
+- `GET {BRIDGE_URL}/friends?accountId=zalo-0987`
+- `POST {BRIDGE_URL}/send` body `{ "accountId": "zalo-0987", "userId": "...", "text": "..." }`
+- `GET {BRIDGE_URL}/chats?accountId=zalo-0987&limit=20` — **đồng bộ tin nhắn cũ** về inbox, trả:
+  ```json
+  { "chats": [ { "userId": "...", "displayName": "...", "avatar": "...", "phone": "09...",
+      "messages": [ { "id": "msg-id", "text": "...", "timestamp": 1690000000000, "direction": "IN" } ] } ] }
+  ```
+  (`displayName/avatar/phone` dùng tự điền hồ sơ khách; `direction: "OUT"` = tin mình gửi từ app Zalo)
+
+(Bridge chỉ 1 nick thì bỏ qua accountId — mọi thứ vẫn chạy như cũ.)
+
+**Bước 1b — Đồng bộ tin cũ về inbox:** trong wizard kết nối (✏️ Sửa tài khoản) có nút **"⬇️ Đồng bộ tin nhắn cũ về inbox"** — gọi `/chats` của bridge. Messenger/Instagram cũng có nút tương tự (qua Graph API `/conversations`, giới hạn ~25 hội thoại gần nhất mỗi lần). Ngoài ra hệ thống **tự động đồng bộ mỗi giờ** cho các kênh đã kết nối, và **tự làm giàu hồ sơ khách** (tên thật, ảnh, SĐT nếu kênh cung cấp) cả khi sync lẫn khi nhận tin mới.
+
+**Bước 2 — Thêm từng nick vào ChumChum:** vào **Cài đặt → Kênh → Zalo cá nhân**:
+1. Bấm **"➕ Thêm nick"** (hiện ra sau khi đã có ít nhất 1 tài khoản)
+2. Bước 2 của wizard: điền tên nick, **Account ID trên bridge** (vd `zalo-0987`) — trường này vừa là accountId gửi cho bridge, vừa thành ID kênh để webhook gắn đúng hội thoại
+3. Bấm **"📱 Lấy mã QR"** → quét bằng app Zalo của **nick đó** trên điện thoại → chờ "đã đăng nhập" → **Lưu kết nối**
+4. Lặp lại cho từng nick tiếp theo.
+
+**Bước 3 — Bridge đẩy tin về đúng nick:** payload webhook của nick nào phải kèm `accountExternalId` của nick đó:
+```json
+{ "accountExternalId": "zalo-0987", "externalUserId": "...", "text": "..." }
+```
+Tin mình gửi từ app Zalo trên điện thoại (echo đi) cũng truyền kèm `accountExternalId` + `"direction": "OUT"` + `externalMessageId` để ghép vào đúng hội thoại, tránh nhân đôi tin.
+
+**Quản lý:** trong Cài đặt → Kênh, mỗi nick có hàng riêng với nút **Bật/Tắt** và **✏️ Sửa** (lấy lại QR khi bridge hết phiên); nút "👥 Đồng bộ bạn bè Zalo" ở wizard cũng lấy bạn bè của đúng nick đang sửa.
+
+**Lưu ý quan trọng:**
+- Hội thoại, khách hàng của từng nick tách riêng. **Cùng 1 người nhắn vào 2 nick sẽ thành 2 khách hàng khác nhau** (chưa có nút gộp khách — nếu cần, yêu cầu thêm).
+- Mỗi nick đăng nhập Zalo Web riêng → Zalo giới hạn số phiên đăng nhập web của cùng tài khoản, nhưng **các nick khác nhau thì độc lập**.
+- Rủi ro khóa nick nhân theo số nick — nick nào bị khóa chỉ ảnh hưởng nick đó (tắt nick đó trong Cài đặt, các kênh khác vẫn chạy).
 
 ---
 

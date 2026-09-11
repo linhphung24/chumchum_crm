@@ -47,7 +47,11 @@ export class ChannelIngestService {
     });
     if (!identity) {
       const customer = await this.prisma.customer.create({
-        data: { name: msg.userDisplayName ?? `Khách ${CHANNEL_LABELS[msg.channelType]}`, avatarUrl: msg.userAvatarUrl },
+        data: {
+          name: msg.userDisplayName ?? `Khách ${CHANNEL_LABELS[msg.channelType]}`,
+          avatarUrl: msg.userAvatarUrl,
+          phone: msg.userPhone,
+        },
       });
       identity = await this.prisma.channelIdentity.create({
         data: {
@@ -58,14 +62,18 @@ export class ChannelIngestService {
           avatarUrl: msg.userAvatarUrl,
         },
       });
-    } else if (msg.userDisplayName || msg.userAvatarUrl) {
-      await this.prisma.channelIdentity.update({
-        where: { id: identity.id },
-        data: {
-          displayName: msg.userDisplayName ?? identity.displayName,
-          avatarUrl: msg.userAvatarUrl ?? identity.avatarUrl,
-        },
-      });
+    } else {
+      if (msg.userDisplayName || msg.userAvatarUrl) {
+        await this.prisma.channelIdentity.update({
+          where: { id: identity.id },
+          data: {
+            displayName: msg.userDisplayName ?? identity.displayName,
+            avatarUrl: msg.userAvatarUrl ?? identity.avatarUrl,
+          },
+        });
+      }
+      // Làm giàu hồ sơ khách: điền tên thật (nếu còn tên mặc định), ảnh, SĐT còn trống
+      await this.enrichCustomer(identity.customerId, msg);
     }
 
     // 3) Hội thoại
@@ -182,6 +190,76 @@ export class ChannelIngestService {
     this.events.emitMessageSent({ conversationId: conversation.id, message });
     this.events.emitConversationUpdated({ conversation: updated });
     return message;
+  }
+
+  /** Điền thông tin còn thiếu của khách từ dữ liệu kênh mang về (không đè dữ liệu đã có) */
+  private async enrichCustomer(customerId: string, msg: NormalizedIncomingMessage) {
+    if (!msg.userDisplayName && !msg.userAvatarUrl && !msg.userPhone) return;
+    const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
+    if (!customer) return;
+    const data: Record<string, string | null> = {};
+    if (msg.userDisplayName && (!customer.name || customer.name.startsWith('Khách'))) data.name = msg.userDisplayName;
+    if (msg.userAvatarUrl && !customer.avatarUrl) data.avatarUrl = msg.userAvatarUrl;
+    if (msg.userPhone && !customer.phone) data.phone = msg.userPhone;
+    if (Object.keys(data).length === 0) return;
+    await this.prisma.customer.update({ where: { id: customerId }, data }).catch(() => undefined);
+  }
+
+  /**
+   * Lưu tin ĐI đã xảy ra trên nền tảng (staff trả lời bằng app gốc / đồng bộ lịch sử)
+   * vào hội thoại — không gửi lại ra kênh, chỉ ghi nhận để timeline đầy đủ.
+   * Dùng chung cho webhook echo và đồng bộ tin cũ.
+   */
+  async ingestOutgoingEcho(params: {
+    channelType: string;
+    accountExternalId: string;
+    externalUserId: string;
+    text?: string;
+    externalMessageId?: string;
+    timestamp?: Date;
+  }): Promise<boolean> {
+    const account = await this.prisma.channelAccount.findUnique({
+      where: { type_externalId: { type: params.channelType as never, externalId: params.accountExternalId } },
+    });
+    if (!account) return false;
+    const identity = await this.prisma.channelIdentity.findUnique({
+      where: { channelAccountId_externalUserId: { channelAccountId: account.id, externalUserId: String(params.externalUserId) } },
+    });
+    if (!identity) return false;
+    const conversation = await this.prisma.conversation.findUnique({
+      where: { customerId_channelAccountId: { customerId: identity.customerId, channelAccountId: account.id } },
+    });
+    if (!conversation) return false;
+    if (params.externalMessageId) {
+      const dup = await this.prisma.message.findFirst({
+        where: { conversationId: conversation.id, externalId: params.externalMessageId },
+      });
+      if (dup) return false;
+    }
+    if (!params.text) return false;
+    const message = await this.prisma.message.create({
+      data: {
+        conversationId: conversation.id,
+        direction: 'OUT',
+        type: 'TEXT',
+        text: params.text,
+        externalId: params.externalMessageId,
+        status: 'SENT',
+        createdAt: params.timestamp ?? new Date(),
+      },
+    });
+    const last = await this.prisma.message.findFirst({
+      where: { conversationId: conversation.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (last?.id === message.id) {
+      await this.prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { lastMessageAt: message.createdAt, lastMessageText: params.text, lastDirection: 'OUT' },
+      }).catch(() => undefined);
+    }
+    this.events.emitMessageSent({ conversationId: conversation.id, message });
+    return true;
   }
 }
 

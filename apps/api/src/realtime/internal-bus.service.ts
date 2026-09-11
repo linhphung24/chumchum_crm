@@ -13,6 +13,15 @@ export class InternalBusService extends EventEmitter {
     this.emit('order.changed', orderId);
   }
 
+  /**
+   * Chỉ bắn khi đơn ĐỔI TRẠNG THÁI (không bắn khi tạo/sửa thông tin đơn).
+   * OrderNotifyService nghe sự kiện này để gửi tin thông báo cho khách —
+   * tách riêng với 'order.changed' (Trello nghe) để tránh gửi trùng khi sửa đơn.
+   */
+  emitOrderStatusChanged(orderId: string) {
+    this.emit('order.status-changed', orderId);
+  }
+
   safeOn(event: string, handler: (payload: string) => void) {
     this.on(event, async (payload: string) => {
       try {

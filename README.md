@@ -116,3 +116,6 @@ NestJS 11 · Prisma 6 (SQLite/PostgreSQL) · Next.js 15 · TailwindCSS · Socket
 - [x] Trello: tạo card tự động, map cột ↔ trạng thái, webhook đồng bộ ngược
 - [x] Thống kê: doanh thu, kênh, trạng thái, hiệu suất nhân viên
 - [x] Cron đồng bộ đơn Shopee (Open Platform)
+- [x] Đồng bộ tin nhắn cũ: Zalo OA (chat/szv2), Messenger + Instagram (Graph API conversations), Zalo cá nhân (bridge /chats) — tự chạy mỗi giờ + nút chạy tay
+- [x] Tự làm giàu hồ sơ khách: tên thật/ảnh/SĐT từ dữ liệu kênh (khi nhận tin mới hoặc đồng bộ)
+- [x] 🔔 Thông báo cho khách khi đơn đổi trạng thái: mẫu tin per-trạng thái (biến `{{khach}}` `{{ma}}` `{{tong}}` `{{sanPham}}` `{{diaChi}}` `{{shop}}`), gửi qua hội thoại của khách, xem trước/gửi thử trong Cài đặt → Thông báo đơn

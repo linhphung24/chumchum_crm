@@ -11,6 +11,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
 import { CommentsModule } from './comments/comments.module';
 import { OrdersModule } from './orders/orders.module';
 import { TrelloModule } from './trello/trello.module';
+import { OrderNotifyModule } from './order-notify/order-notify.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { DomainsModule } from './domains/domains.module';
@@ -32,6 +33,7 @@ import { JobsModule } from './jobs/jobs.module';
     CommentsModule,
     OrdersModule,
     TrelloModule,
+    OrderNotifyModule,
     AnalyticsModule,
     NotificationsModule,
     DomainsModule,

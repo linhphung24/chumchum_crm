@@ -298,10 +298,14 @@ export class ZaloOaAdapter implements ChannelAdapter {
  * ⚠️ KÊNH KHÔNG CHÍNH THỨC — Zalo cá nhân qua "bridge" tự host.
  * Zalo KHÔNG có API chính thức cho tài khoản cá nhân. Bridge là service bên ngoài
  * (vd: thư viện reverse-engineer tự chạy) tự chịu rủi ro vi phạm ToS / bị khoá nick.
- * Bridge contract:
- *   POST {ZALO_PERSONAL_BRIDGE_URL}/send   header x-api-key
- *   body { userId, text } → { messageId? }
- *   Bridge nhận tin từ Zalo rồi POST về /webhooks/zalo-personal với payload đã chuẩn hoá.
+ *
+ * HỖ TRỢ NHIỀU TÀI KHOẢN ZALO: mỗi nick = 1 ChannelAccount riêng (externalId = accountId
+ * trên bridge). Bridge contract:
+ *   POST {BRIDGE_URL}/send   header x-api-key
+ *   body { accountId, userId, text, imageUrl?, filename? } → { messageId? }
+ *   - accountId: bridge dùng session Zalo nào để gửi (mặc định = externalId của tài khoản kênh)
+ *   Khi có tin đến từ nick nào, bridge POST về /webhooks/zalo-personal kèm
+ *   accountExternalId của nick đó để ChumChum gắn đúng kênh/hội thoại.
  * Chưa cấu hình bridge = mock.
  */
 @Injectable()
@@ -310,17 +314,24 @@ export class ZaloPersonalAdapter implements ChannelAdapter {
   readonly type = 'ZALO_PERSONAL' as ChannelType;
   readonly label = CHANNEL_LABELS.ZALO_PERSONAL;
 
-  async sendText(account: { credentials?: string | null }, to: string, text: string): Promise<SendResult> {
-    const cred = parseCredentials<{ bridgeUrl?: string; apiKey?: string }>(account.credentials);
+  /** accountId trên bridge: ưu tiên credentials.accountId, mặc định dùng externalId */
+  private accountId(cred: { accountId?: string } | null, externalId?: string): string {
+    return cred?.accountId ?? externalId ?? 'default';
+  }
+
+  async sendText(account: { credentials?: string | null; externalId?: string }, to: string, text: string): Promise<SendResult> {
+    const cred = parseCredentials<{ bridgeUrl?: string; apiKey?: string; accountId?: string }>(account.credentials);
     const bridgeUrl = cred?.bridgeUrl ?? process.env.ZALO_PERSONAL_BRIDGE_URL;
     const apiKey = cred?.apiKey ?? process.env.ZALO_PERSONAL_BRIDGE_API_KEY;
     if (!bridgeUrl) {
       this.logger.warn('Zalo cá nhân: chưa cấu hình bridge → mock');
       return mockSendResult();
     }
-    const json = await postJson(`${bridgeUrl.replace(/\/$/, '')}/send`, { userId: to, text }, {
-      'x-api-key': apiKey ?? '',
-    });
+    const json = await postJson(
+      `${bridgeUrl.replace(/\/$/, '')}/send`,
+      { accountId: this.accountId(cred, account.externalId), userId: to, text },
+      { 'x-api-key': apiKey ?? '' },
+    );
     return { externalId: (json?.messageId as string) ?? undefined };
   }
 
@@ -333,13 +344,13 @@ export class ZaloPersonalAdapter implements ChannelAdapter {
     if (att.type !== 'IMAGE') {
       return { error: 'Zalo cá nhân hiện chỉ hỗ trợ gửi ảnh (kênh không chính thức)' };
     }
-    const cred = parseCredentials<{ bridgeUrl?: string; apiKey?: string }>(account.credentials);
+    const cred = parseCredentials<{ bridgeUrl?: string; apiKey?: string; accountId?: string }>(account.credentials);
     const bridgeUrl = cred?.bridgeUrl ?? process.env.ZALO_PERSONAL_BRIDGE_URL;
     const apiKey = cred?.apiKey ?? process.env.ZALO_PERSONAL_BRIDGE_API_KEY;
     if (!bridgeUrl) return mockSendResult();
     const json = await postJson(
       `${bridgeUrl.replace(/\/$/, '')}/send`,
-      { userId: to, text: '', imageUrl: att.url, filename: att.filename },
+      { accountId: this.accountId(cred, account.externalId), userId: to, text: '', imageUrl: att.url, filename: att.filename },
       { 'x-api-key': apiKey ?? '' },
     );
     if (json?.error) return { error: String(json.error) };

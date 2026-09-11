@@ -13,7 +13,9 @@ import { createHmac } from 'crypto';
  * 1) Đồng bộ đơn Shopee mỗi 30 phút (nếu đã cấu hình credentials)
  * 2) Làm mới access token Zalo OA mỗi ngày (cần Refresh Token + App ID) — tránh hết hạn 45 ngày
  * 3) Đồng bộ hội thoại Zalo OA mỗi 15 phút — staff trả lời trực tiếp trên app Zalo vẫn về kịp CRM
- * 4) Dọn webhook log cũ mỗi ngày
+ * 4) Đồng bộ tin nhắn Messenger/Instagram/Zalo cá nhân mỗi giờ (tự động, chống trùng)
+ * 5) Đồng bộ bạn bè Zalo cá nhân + làm giàu SĐT khách mỗi ngày 4h sáng
+ * 6) Dọn webhook log cũ mỗi ngày
  */
 @Injectable()
 export class JobsService {
@@ -51,6 +53,38 @@ export class JobsService {
         this.logger.log(`Zalo OA (${account.name}): ${r.ok ? '✅ ' + r.message : '⚠️ ' + r.message}`);
       } catch (err) {
         this.logger.warn(`Zalo OA (${account.name}) làm mới token lỗi: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /** Tự động đồng bộ tin cũ: Messenger, Instagram, Zalo cá nhân (bridge) mỗi giờ */
+  @Cron(CronExpression.EVERY_HOUR)
+  async syncOtherChats() {
+    const accounts = await this.prisma.channelAccount.findMany({
+      where: { type: { in: ['FACEBOOK', 'INSTAGRAM', 'ZALO_PERSONAL'] }, isActive: true },
+    });
+    for (const account of accounts) {
+      if (!account.credentials) continue; // chưa kết nối thật → bỏ qua
+      try {
+        const r = await this.channels.syncChats(account.id);
+        if (r.created) this.logger.log(`${account.name}: đồng bộ thêm ${r.created} tin cũ`);
+      } catch (err) {
+        this.logger.warn(`${account.name} đồng bộ tin cũ lỗi: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /** Đồng bộ bạn bè Zalo cá nhân (kèm SĐT làm giàu hồ sơ) mỗi ngày */
+  @Cron(CronExpression.EVERY_DAY_AT_4AM)
+  async syncZaloFriends() {
+    const accounts = await this.prisma.channelAccount.findMany({ where: { type: 'ZALO_PERSONAL', isActive: true } });
+    for (const account of accounts) {
+      if (!account.credentials) continue;
+      try {
+        const r = await this.channels.syncZaloPersonalFriends(account.id);
+        if (r.created) this.logger.log(`${account.name}: thêm ${r.created} bạn bè Zalo`);
+      } catch (err) {
+        this.logger.warn(`${account.name} đồng bộ bạn bè lỗi: ${(err as Error).message}`);
       }
     }
   }
